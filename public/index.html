@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Ocean Sandbox · 3D Simulation</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        height: 100%;
+        font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+        color: #eaf6ff;
+        overflow: hidden;
+      }
+      body {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: radial-gradient(circle at 50% 20%, #1a5276 0%, #0b2a3d 55%, #04121c 100%);
+        position: relative;
+      }
+      /* Animated wave bands in the background. */
+      .wave {
+        position: absolute;
+        left: 0;
+        width: 200%;
+        height: 220px;
+        bottom: 0;
+        background: rgba(64, 164, 223, 0.18);
+        border-radius: 45%;
+        animation: drift 14s linear infinite;
+      }
+      .wave.w2 {
+        bottom: -40px;
+        background: rgba(40, 120, 180, 0.22);
+        animation-duration: 20s;
+      }
+      .wave.w3 {
+        bottom: -80px;
+        background: rgba(20, 80, 130, 0.28);
+        animation-duration: 28s;
+      }
+      @keyframes drift {
+        from {
+          transform: translateX(0) rotate(0deg);
+        }
+        to {
+          transform: translateX(-50%) rotate(6deg);
+        }
+      }
+      .card {
+        position: relative;
+        z-index: 2;
+        text-align: center;
+        padding: 48px 40px;
+        max-width: 620px;
+        background: rgba(4, 18, 28, 0.55);
+        border: 1px solid rgba(120, 200, 255, 0.25);
+        border-radius: 20px;
+        backdrop-filter: blur(10px);
+        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
+      }
+      h1 {
+        font-size: 2.6rem;
+        letter-spacing: 1px;
+        margin-bottom: 12px;
+        background: linear-gradient(90deg, #7fd8ff, #c8f0ff);
+        -webkit-background-clip: text;
+        background-clip: text;
+        -webkit-text-fill-color: transparent;
+      }
+      p.lead {
+        font-size: 1.05rem;
+        line-height: 1.6;
+        color: #bcdcee;
+        margin-bottom: 28px;
+      }
+      .features {
+        display: flex;
+        gap: 14px;
+        justify-content: center;
+        flex-wrap: wrap;
+        margin-bottom: 32px;
+      }
+      .chip {
+        font-size: 0.8rem;
+        padding: 6px 14px;
+        border-radius: 999px;
+        background: rgba(120, 200, 255, 0.12);
+        border: 1px solid rgba(120, 200, 255, 0.3);
+      }
+      .launch {
+        display: inline-block;
+        text-decoration: none;
+        color: #04121c;
+        font-weight: 700;
+        font-size: 1.1rem;
+        padding: 16px 42px;
+        border-radius: 999px;
+        background: linear-gradient(90deg, #7fd8ff, #4fb4e8);
+        transition: transform 0.18s ease, box-shadow 0.18s ease;
+        box-shadow: 0 8px 24px rgba(79, 180, 232, 0.4);
+      }
+      .launch:hover {
+        transform: translateY(-3px);
+        box-shadow: 0 12px 32px rgba(79, 180, 232, 0.6);
+      }
+      footer {
+        margin-top: 26px;
+        font-size: 0.78rem;
+        color: #88acc2;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wave"></div>
+    <div class="wave w2"></div>
+    <div class="wave w3"></div>
+
+    <main class="card">
+      <h1>🌊 Ocean Sandbox</h1>
+      <p class="lead">
+        A real-time, photorealistic 3D ocean simulation running in your browser.
+        Tune the waves, sky and sun in real time, then sail through it in
+        first-person or orbit around it cinematically.
+      </p>
+      <div class="features">
+        <span class="chip">Three.js + WebGL</span>
+        <span class="chip">Live wave controls</span>
+        <span class="chip">Dynamic sky &amp; sun</span>
+        <span class="chip">FPS-adaptive</span>
+      </div>
+      <a class="launch" href="/simulation.html">Launch Simulation →</a>
+      <footer>Deployed as a Render web service · Node + Express</footer>
+    </main>
+  </body>
+</html>

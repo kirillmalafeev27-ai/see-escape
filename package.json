@@ -1,0 +1,19 @@
+{
+  "name": "ocean-sandbox",
+  "version": "1.0.0",
+  "description": "Interactive 3D ocean sandbox simulation (Three.js) served as a Render web service",
+  "type": "module",
+  "main": "server.js",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "compression": "^1.7.4"
+  },
+  "license": "MIT"
+}

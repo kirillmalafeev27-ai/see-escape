@@ -1,0 +1,15 @@
+# Render Blueprint — deploys the Ocean Sandbox as a web service.
+# Docs: https://render.com/docs/blueprint-spec
+services:
+  - type: web
+    name: ocean-sandbox
+    runtime: node
+    plan: free
+    region: oregon
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "20"

@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Ocean Sandbox · Simulation</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        height: 100%;
+        overflow: hidden;
+        background: #04121c;
+        font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+        color: #eaf6ff;
+      }
+      #app {
+        position: fixed;
+        inset: 0;
+      }
+      canvas {
+        display: block;
+      }
+      /* HUD */
+      #hud {
+        position: fixed;
+        top: 14px;
+        left: 14px;
+        z-index: 10;
+        font-size: 0.8rem;
+        line-height: 1.5;
+        background: rgba(4, 18, 28, 0.55);
+        border: 1px solid rgba(120, 200, 255, 0.25);
+        border-radius: 12px;
+        padding: 12px 16px;
+        backdrop-filter: blur(6px);
+        pointer-events: none;
+        max-width: 280px;
+      }
+      #hud b {
+        color: #7fd8ff;
+      }
+      #fps {
+        font-variant-numeric: tabular-nums;
+      }
+      #back {
+        position: fixed;
+        top: 14px;
+        right: 14px;
+        z-index: 10;
+        text-decoration: none;
+        font-size: 0.8rem;
+        padding: 8px 16px;
+        border-radius: 999px;
+        color: #eaf6ff;
+        background: rgba(4, 18, 28, 0.6);
+        border: 1px solid rgba(120, 200, 255, 0.3);
+        backdrop-filter: blur(6px);
+      }
+      #back:hover {
+        background: rgba(79, 180, 232, 0.3);
+      }
+      /* Loading overlay */
+      #loader {
+        position: fixed;
+        inset: 0;
+        z-index: 50;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        background: radial-gradient(circle at 50% 30%, #1a5276, #04121c);
+        transition: opacity 0.6s ease;
+      }
+      #loader.hidden {
+        opacity: 0;
+        pointer-events: none;
+      }
+      .spinner {
+        width: 54px;
+        height: 54px;
+        border: 4px solid rgba(120, 200, 255, 0.2);
+        border-top-color: #7fd8ff;
+        border-radius: 50%;
+        animation: spin 0.9s linear infinite;
+        margin-bottom: 18px;
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      #err {
+        position: fixed;
+        inset: 0;
+        z-index: 60;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        padding: 30px;
+        text-align: center;
+        background: #04121c;
+      }
+      .lil-gui {
+        --width: 300px;
+        --font-size: 12px;
+      }
+    </style>
+
+    <!-- Three.js via ES module CDN + import map -->
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+          "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <div id="app"></div>
+
+    <div id="hud">
+      <div><b>FPS:</b> <span id="fps">—</span> · <b>Quality:</b> <span id="quality">high</span></div>
+      <hr style="border-color: rgba(120,200,255,0.15); margin: 8px 0;" />
+      <div><b>C</b> — toggle Orbit / First-person</div>
+      <div><b>W A S D</b> — move (first-person)</div>
+      <div><b>Shift</b> — sprint · <b>Space/Ctrl</b> — up/down</div>
+      <div><b>Click</b> canvas to capture mouse-look</div>
+    </div>
+
+    <a id="back" href="/">← Home</a>
+
+    <div id="loader">
+      <div class="spinner"></div>
+      <div>Loading ocean…</div>
+    </div>
+
+    <div id="err">
+      <div>
+        <h2 style="color:#ff8080">WebGL failed to start</h2>
+        <p style="margin-top:10px;color:#bcdcee">
+          This simulation needs a WebGL2-capable browser. Try a recent Chrome,
+          Firefox or Safari with hardware acceleration enabled.
+        </p>
+      </div>
+    </div>
+
+    <script type="module">
+      import * as THREE from "three";
+      import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+      import { PointerLockControls } from "three/addons/controls/PointerLockControls.js";
+      import { Water } from "three/addons/objects/Water.js";
+      import { Sky } from "three/addons/objects/Sky.js";
+      import { GUI } from "three/addons/libs/lil-gui.module.min.js";
+
+      const errEl = document.getElementById("err");
+      const loaderEl = document.getElementById("loader");
+
+      try {
+        main();
+      } catch (e) {
+        console.error(e);
+        loaderEl.style.display = "none";
+        errEl.style.display = "flex";
+      }
+
+      function main() {
+        // ---- Renderer ----
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        renderer.toneMappingExposure = 0.5;
+        document.getElementById("app").appendChild(renderer.domElement);
+
+        // ---- Scene & camera ----
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(
+          55,
+          window.innerWidth / window.innerHeight,
+          1,
+          20000
+        );
+        camera.position.set(30, 30, 100);
+
+        // ---- Sun vector ----
+        const sun = new THREE.Vector3();
+
+        // ---- Water ----
+        const waterGeometry = new THREE.PlaneGeometry(10000, 10000);
+        const water = new Water(waterGeometry, {
+          textureWidth: 512,
+          textureHeight: 512,
+          waterNormals: new THREE.TextureLoader().load(
+            "https://unpkg.com/three@0.160.0/examples/textures/waternormals.jpg",
+            (texture) => {
+              texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+            }
+          ),
+          sunDirection: new THREE.Vector3(),
+          sunColor: 0xffffff,
+          waterColor: 0x001e2f,
+          distortionScale: 3.7,
+          fog: scene.fog !== undefined,
+        });
+        water.rotation.x = -Math.PI / 2;
+        scene.add(water);
+
+        // ---- Sky ----
+        const sky = new Sky();
+        sky.scale.setScalar(10000);
+        scene.add(sky);
+
+        const skyUniforms = sky.material.uniforms;
+        skyUniforms["turbidity"].value = 10;
+        skyUniforms["rayleigh"].value = 2;
+        skyUniforms["mieCoefficient"].value = 0.005;
+        skyUniforms["mieDirectionalG"].value = 0.8;
+
+        const pmremGenerator = new THREE.PMREMGenerator(renderer);
+        const sceneEnv = new THREE.Scene();
+        let renderTarget;
+
+        const params = {
+          elevation: 3,
+          azimuth: 180,
+          waveSize: 3.7,
+          waveSpeed: 1.0,
+          waterColor: "#001e2f",
+          turbidity: 10,
+          rayleigh: 2,
+          autoRotate: false,
+        };
+
+        function updateSun() {
+          const phi = THREE.MathUtils.degToRad(90 - params.elevation);
+          const theta = THREE.MathUtils.degToRad(params.azimuth);
+          sun.setFromSphericalCoords(1, phi, theta);
+
+          sky.material.uniforms["sunPosition"].value.copy(sun);
+          water.material.uniforms["sunDirection"].value.copy(sun).normalize();
+
+          if (renderTarget !== undefined) renderTarget.dispose();
+          sceneEnv.add(sky);
+          renderTarget = pmremGenerator.fromScene(sceneEnv);
+          scene.add(sky);
+          scene.environment = renderTarget.texture;
+        }
+        updateSun();
+
+        // ---- Camera controls: Orbit + First-person ----
+        const orbit = new OrbitControls(camera, renderer.domElement);
+        orbit.maxPolarAngle = Math.PI * 0.495;
+        orbit.target.set(0, 10, 0);
+        orbit.minDistance = 40;
+        orbit.maxDistance = 600;
+        orbit.update();
+
+        const fpControls = new PointerLockControls(camera, renderer.domElement);
+        const move = { f: false, b: false, l: false, r: false, up: false, down: false, sprint: false };
+        let mode = "orbit"; // "orbit" | "fp"
+
+        function setMode(next) {
+          mode = next;
+          if (mode === "orbit") {
+            fpControls.unlock();
+            orbit.enabled = true;
+          } else {
+            orbit.enabled = false;
+          }
+          document.getElementById("quality").nextSibling; // no-op, keep refs alive
+        }
+
+        renderer.domElement.addEventListener("click", () => {
+          if (mode === "fp") fpControls.lock();
+        });
+
+        window.addEventListener("keydown", (e) => {
+          switch (e.code) {
+            case "KeyC":
+              setMode(mode === "orbit" ? "fp" : "orbit");
+              break;
+            case "KeyW":
+            case "ArrowUp":
+              move.f = true;
+              break;
+            case "KeyS":
+            case "ArrowDown":
+              move.b = true;
+              break;
+            case "KeyA":
+            case "ArrowLeft":
+              move.l = true;
+              break;
+            case "KeyD":
+            case "ArrowRight":
+              move.r = true;
+              break;
+            case "Space":
+              move.up = true;
+              break;
+            case "ControlLeft":
+            case "ControlRight":
+              move.down = true;
+              break;
+            case "ShiftLeft":
+            case "ShiftRight":
+              move.sprint = true;
+              break;
+          }
+        });
+        window.addEventListener("keyup", (e) => {
+          switch (e.code) {
+            case "KeyW":
+            case "ArrowUp":
+              move.f = false;
+              break;
+            case "KeyS":
+            case "ArrowDown":
+              move.b = false;
+              break;
+            case "KeyA":
+            case "ArrowLeft":
+              move.l = false;
+              break;
+            case "KeyD":
+            case "ArrowRight":
+              move.r = false;
+              break;
+            case "Space":
+              move.up = false;
+              break;
+            case "ControlLeft":
+            case "ControlRight":
+              move.down = false;
+              break;
+            case "ShiftLeft":
+            case "ShiftRight":
+              move.sprint = false;
+              break;
+          }
+        });
+
+        // ---- Sandbox control panel (GUI) ----
+        const gui = new GUI({ title: "🌊 Sandbox Controls" });
+
+        const fWaves = gui.addFolder("Waves");
+        fWaves.add(params, "waveSize", 0, 8, 0.1).name("Distortion").onChange((v) => {
+          water.material.uniforms["distortionScale"].value = v;
+        });
+        fWaves.add(params, "waveSpeed", 0, 4, 0.05).name("Speed");
+        fWaves.addColor(params, "waterColor").name("Water color").onChange((v) => {
+          water.material.uniforms["waterColor"].value.set(v);
+        });
+
+        const fSky = gui.addFolder("Sky & Sun");
+        fSky.add(params, "elevation", 0, 90, 0.1).name("Sun elevation").onChange(updateSun);
+        fSky.add(params, "azimuth", -180, 180, 0.1).name("Sun azimuth").onChange(updateSun);
+        fSky.add(params, "turbidity", 0, 20, 0.1).name("Turbidity").onChange((v) => {
+          skyUniforms["turbidity"].value = v;
+          updateSun();
+        });
+        fSky.add(params, "rayleigh", 0, 4, 0.01).name("Rayleigh").onChange((v) => {
+          skyUniforms["rayleigh"].value = v;
+          updateSun();
+        });
+
+        const fCam = gui.addFolder("Camera");
+        fCam.add(params, "autoRotate").name("Auto-rotate (orbit)").onChange((v) => {
+          orbit.autoRotate = v;
+          orbit.autoRotateSpeed = 0.5;
+        });
+        fCam
+          .add({ toggle: () => setMode(mode === "orbit" ? "fp" : "orbit") }, "toggle")
+          .name("Toggle camera mode (C)");
+
+        const presets = {
+          "Calm dawn": { elevation: 2, azimuth: 180, waveSize: 1.5, rayleigh: 1, turbidity: 8 },
+          "Bright noon": { elevation: 60, azimuth: 90, waveSize: 3.7, rayleigh: 2, turbidity: 4 },
+          "Stormy dusk": { elevation: 1, azimuth: -120, waveSize: 7, rayleigh: 3.5, turbidity: 18 },
+        };
+        const presetActions = {};
+        for (const [name, p] of Object.entries(presets)) {
+          presetActions[name] = () => {
+            Object.assign(params, p);
+            water.material.uniforms["distortionScale"].value = params.waveSize;
+            skyUniforms["turbidity"].value = params.turbidity;
+            skyUniforms["rayleigh"].value = params.rayleigh;
+            updateSun();
+            gui.controllersRecursive().forEach((c) => c.updateDisplay());
+          };
+        }
+        const fPresets = gui.addFolder("Presets");
+        for (const name of Object.keys(presets)) {
+          fPresets.add(presetActions, name);
+        }
+
+        // ---- FPS + adaptive quality ----
+        const fpsEl = document.getElementById("fps");
+        const qualityEl = document.getElementById("quality");
+        let frames = 0;
+        let lastFpsTime = performance.now();
+        let currentFps = 60;
+        let quality = "high";
+
+        function monitorFps(now) {
+          frames++;
+          if (now - lastFpsTime >= 500) {
+            currentFps = Math.round((frames * 1000) / (now - lastFpsTime));
+            fpsEl.textContent = currentFps;
+            frames = 0;
+            lastFpsTime = now;
+            adaptQuality();
+          }
+        }
+
+        function adaptQuality() {
+          // Scale pixel ratio / water res down if struggling, back up if comfortable.
+          if (currentFps < 30 && quality !== "low") {
+            quality = "low";
+            renderer.setPixelRatio(1);
+          } else if (currentFps >= 50 && quality === "low") {
+            quality = "high";
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+          }
+          qualityEl.textContent = quality;
+        }
+
+        // ---- First-person movement integration ----
+        const velocity = new THREE.Vector3();
+        const direction = new THREE.Vector3();
+
+        function updateFp(delta) {
+          const speed = (move.sprint ? 400 : 150) * delta;
+          velocity.x -= velocity.x * 8.0 * delta;
+          velocity.z -= velocity.z * 8.0 * delta;
+          velocity.y -= velocity.y * 8.0 * delta;
+
+          direction.z = Number(move.f) - Number(move.b);
+          direction.x = Number(move.r) - Number(move.l);
+          direction.normalize();
+
+          if (move.f || move.b) velocity.z -= direction.z * speed;
+          if (move.l || move.r) velocity.x -= direction.x * speed;
+          if (move.up) velocity.y += speed;
+          if (move.down) velocity.y -= speed;
+
+          fpControls.moveRight(-velocity.x * delta);
+          fpControls.moveForward(-velocity.z * delta);
+          camera.position.y += velocity.y * delta;
+
+          // Keep above the surface.
+          if (camera.position.y < 3) camera.position.y = 3;
+        }
+
+        // ---- Resize ----
+        window.addEventListener("resize", () => {
+          camera.aspect = window.innerWidth / window.innerHeight;
+          camera.updateProjectionMatrix();
+          renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // ---- Animation loop ----
+        const clock = new THREE.Clock();
+
+        function animate() {
+          requestAnimationFrame(animate);
+          const delta = clock.getDelta();
+          const now = performance.now();
+
+          water.material.uniforms["time"].value += params.waveSpeed * delta;
+
+          if (mode === "orbit") {
+            orbit.update();
+          } else {
+            updateFp(delta);
+          }
+
+          renderer.render(scene, camera);
+          monitorFps(now);
+        }
+
+        // Hide loader once first frame is ready.
+        loaderEl.classList.add("hidden");
+        setTimeout(() => (loaderEl.style.display = "none"), 700);
+
+        animate();
+      }
+    </script>
+  </body>
+</html>
