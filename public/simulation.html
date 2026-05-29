@@ -197,10 +197,14 @@
           textureWidth: 512,
           textureHeight: 512,
           waterNormals: new THREE.TextureLoader().load(
-            "https://unpkg.com/three@0.160.0/examples/textures/waternormals.jpg",
+            // Served from our own origin to avoid cross-origin WebGL taint
+            // issues that would otherwise leave the water a flat mirror.
+            "textures/waternormals.jpg",
             (texture) => {
               texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
-            }
+            },
+            undefined,
+            (err) => console.error("Failed to load water normals:", err)
           ),
           sunDirection: new THREE.Vector3(),
           sunColor: 0xffffff,
@@ -227,7 +231,7 @@
         let renderTarget;
 
         const params = {
-          elevation: 3,
+          elevation: 8,
           azimuth: 180,
           waveSize: 3.7,
           waveSpeed: 1.0,
