@@ -9,6 +9,9 @@ first-person or orbit around it cinematically.
 
 ## Features
 
+- **Real 3D waves** — Gerstner-wave vertex displacement on a subdivided mesh,
+  so crests physically rise in 3D (not just a normal map). Adjustable height,
+  choppiness and swell size.
 - **Photorealistic water** — Three.js `Water` with custom reflections/refraction.
 - **Procedural sky & sun** — atmospheric scattering (`Sky`) with adjustable
   turbidity, Rayleigh scattering, sun elevation and azimuth.
