@@ -129,8 +129,9 @@
       <hr style="border-color: rgba(120,200,255,0.15); margin: 8px 0;" />
       <div><b>C</b> — toggle Orbit / First-person</div>
       <div><b>W A S D</b> — move (first-person)</div>
-      <div><b>Shift</b> — sprint · <b>Space/Ctrl</b> — up/down</div>
+      <div><b>Shift</b> — sprint · <b>Space/Ctrl</b> — rise above / skim surface</div>
       <div><b>Click</b> canvas to capture mouse-look</div>
+      <div style="color:#7fd8ff;margin-top:4px">Camera floats &amp; bobs on the waves 🌊</div>
     </div>
 
     <a id="back" href="/">← Home</a>
@@ -223,6 +224,15 @@
         // sum of Gerstner waves into the material's vertex shader, displacing
         // the (subdivided) geometry. The plane is rotated -90° about X, so in
         // local space the horizontal plane is (x, y) and "up" is +z.
+        // Single source of truth for the wave set — used both to generate the
+        // GPU vertex displacement and the CPU height sampling, so they match.
+        const WAVES = [
+          { dir: [1.0, 0.6], steep: 0.32, len: 900, speed: 1.0 },
+          { dir: [-0.7, 1.0], steep: 0.28, len: 560, speed: 1.12 },
+          { dir: [0.4, -1.0], steep: 0.26, len: 320, speed: 1.28 },
+          { dir: [-1.0, -0.5], steep: 0.22, len: 180, speed: 1.45 },
+        ];
+
         const waveUniforms = {
           uWaveHeight: { value: 1.0 }, // vertical scale of the swells
           uWaveChop: { value: 0.9 }, // horizontal sharpening of crests
@@ -231,6 +241,16 @@
         // ShaderMaterial uploads everything in material.uniforms, so register
         // our custom uniforms there as the source of truth.
         Object.assign(water.material.uniforms, waveUniforms);
+
+        // GLSL gerstner() calls generated from WAVES. Force a decimal point on
+        // every literal — ESSL 1.00 won't implicitly convert int -> float.
+        const glf = (n) => (Number.isInteger(n) ? n.toFixed(1) : String(n));
+        const waveCalls = WAVES.map(
+          (w) =>
+            `disp += gerstner(vec2(${glf(w.dir[0])}, ${glf(w.dir[1])}), ${glf(w.steep)} * uWaveChop, ${glf(
+              w.len
+            )} * uWaveScale, ${glf(w.speed)}, p, t, tangent, binormal);`
+        ).join("\n                ");
 
         water.material.onBeforeCompile = (shader) => {
           shader.vertexShader = shader.vertexShader
@@ -271,10 +291,7 @@
                 vec3 binormal = vec3(0.0, 1.0, 0.0);
                 vec3 disp = vec3(0.0);
 
-                disp += gerstner(vec2( 1.0,  0.6), 0.32 * uWaveChop, 900.0 * uWaveScale, 1.00, p, t, tangent, binormal);
-                disp += gerstner(vec2(-0.7,  1.0), 0.28 * uWaveChop, 560.0 * uWaveScale, 1.12, p, t, tangent, binormal);
-                disp += gerstner(vec2( 0.4, -1.0), 0.26 * uWaveChop, 320.0 * uWaveScale, 1.28, p, t, tangent, binormal);
-                disp += gerstner(vec2(-1.0, -0.5), 0.22 * uWaveChop, 180.0 * uWaveScale, 1.45, p, t, tangent, binormal);
+                ${waveCalls}
 
                 vec3 gPos = position;
                 gPos.xy += disp.xy;            // horizontal chop -> sharp crests
@@ -289,6 +306,32 @@
               "#include <beginnormal_vertex>\n objectNormal = normalize(gNorm);"
             );
         };
+
+        // CPU mirror of the GPU Gerstner sum: returns the water surface height
+        // (world Y) at a world (x, z). Lets the camera ride the waves instead
+        // of clipping straight through them. (Horizontal chop is ignored here,
+        // the standard buoyancy approximation — vertical height is what matters.)
+        function sampleWaveHeight(wx, wz) {
+          const t = water.material.uniforms.time.value;
+          const chop = water.material.uniforms.uWaveChop.value;
+          const scale = water.material.uniforms.uWaveScale.value;
+          const height = water.material.uniforms.uWaveHeight.value;
+          // Plane is rotated -90° about X: local (x, y) -> world (x, -z).
+          const px = wx;
+          const py = -wz;
+          let h = 0;
+          for (const w of WAVES) {
+            const k = (2 * Math.PI) / (w.len * scale);
+            const c = Math.sqrt(9.8 / k) * w.speed;
+            const dl = Math.hypot(w.dir[0], w.dir[1]);
+            const dx = w.dir[0] / dl;
+            const dy = w.dir[1] / dl;
+            const f = k * (dx * px + dy * py - c * t);
+            const a = (w.steep * chop) / k;
+            h += a * Math.sin(f);
+          }
+          return h * height;
+        }
 
         // ---- Sky ----
         const sky = new Sky();
@@ -317,6 +360,7 @@
           turbidity: 10,
           rayleigh: 2,
           autoRotate: false,
+          floatOnWaves: true,
         };
 
         function updateSun() {
@@ -466,6 +510,7 @@
           orbit.autoRotate = v;
           orbit.autoRotateSpeed = 0.5;
         });
+        fCam.add(params, "floatOnWaves").name("Float on waves (1st-person)");
         fCam
           .add({ toggle: () => setMode(mode === "orbit" ? "fp" : "orbit") }, "toggle")
           .name("Toggle camera mode (C)");
@@ -528,12 +573,13 @@
         // ---- First-person movement integration ----
         const velocity = new THREE.Vector3();
         const direction = new THREE.Vector3();
+        const EYE_HEIGHT = 6; // how high the "swimmer/boat" sits above the surface
+        let fpHeightOffset = 0; // lets you climb above / dip toward the surface
 
         function updateFp(delta) {
           const speed = (move.sprint ? 400 : 150) * delta;
           velocity.x -= velocity.x * 8.0 * delta;
           velocity.z -= velocity.z * 8.0 * delta;
-          velocity.y -= velocity.y * 8.0 * delta;
 
           direction.z = Number(move.f) - Number(move.b);
           direction.x = Number(move.r) - Number(move.l);
@@ -541,15 +587,37 @@
 
           if (move.f || move.b) velocity.z -= direction.z * speed;
           if (move.l || move.r) velocity.x -= direction.x * speed;
-          if (move.up) velocity.y += speed;
-          if (move.down) velocity.y -= speed;
 
+          // Horizontal movement (along the surface).
           fpControls.moveRight(-velocity.x * delta);
           fpControls.moveForward(-velocity.z * delta);
-          camera.position.y += velocity.y * delta;
 
-          // Keep above the surface.
-          if (camera.position.y < 3) camera.position.y = 3;
+          if (params.floatOnWaves) {
+            // Up/Down adjusts how far above the surface we ride (raise to fly
+            // over the swells for an overview, lower to skim the crests).
+            const vSpeed = (move.sprint ? 160 : 70) * delta;
+            if (move.up) fpHeightOffset += vSpeed;
+            if (move.down) fpHeightOffset -= vSpeed;
+            fpHeightOffset = Math.max(0, Math.min(fpHeightOffset, 1200));
+
+            // Ride the wave: ease the camera toward the surface height under it
+            // so it bobs up and down with the swell instead of clipping through.
+            const surfaceY = sampleWaveHeight(camera.position.x, camera.position.z);
+            const targetY = surfaceY + EYE_HEIGHT + fpHeightOffset;
+            const t = 1 - Math.exp(-6 * delta); // frame-rate independent damping
+            camera.position.y += (targetY - camera.position.y) * t;
+
+            // Never let a fast-rising crest swallow the camera.
+            const floorY = surfaceY + 1.5;
+            if (camera.position.y < floorY) camera.position.y = floorY;
+          } else {
+            // Free-fly fallback.
+            velocity.y -= velocity.y * 8.0 * delta;
+            if (move.up) velocity.y += speed;
+            if (move.down) velocity.y -= speed;
+            camera.position.y += velocity.y * delta;
+            if (camera.position.y < 3) camera.position.y = 3;
+          }
         }
 
         // ---- Resize ----

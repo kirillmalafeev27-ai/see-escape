@@ -19,6 +19,10 @@ first-person or orbit around it cinematically.
   sun position and one-click weather presets (Calm dawn, Bright noon, Stormy dusk).
 - **Dual cameras** — orbit (cinematic) and first-person (`WASD` + mouse-look),
   toggle with `C`.
+- **Wave-riding camera** — in first-person the camera floats and bobs on the
+  water surface (the Gerstner sum is mirrored on the CPU to sample surface
+  height) instead of clipping through the swells. `Space`/`Ctrl` rise above or
+  skim the crests; toggle with **Float on waves**.
 - **Adaptive quality** — live FPS monitor scales pixel ratio to keep it smooth.
 - **Production server** — Express with gzip compression, request logging and a
   `/healthz` health check endpoint.
