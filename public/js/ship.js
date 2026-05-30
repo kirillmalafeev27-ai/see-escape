@@ -91,6 +91,7 @@ function buildHatch(group, dims) {
 
 function buildCannon(side) {
   const root = new THREE.Group(); // yaw pivot (fires along local +Z)
+  root.userData.isCannon = true;
   const dark = mat(0x2a2a2e, 0.5, 0.6);
   const wood = mat(0x5b4026, 0.9);
   // carriage
@@ -142,6 +143,26 @@ export function buildPlayerShip() {
       group.add(c.root);
       cannons.push(c);
     }
+  }
+
+  // Primitive visual meshes (everything except the cannons) so they can be
+  // hidden once the loaded .glb model takes over the looks.
+  const primitiveVisuals = [];
+  group.traverse((o) => {
+    if (!o.isMesh) return;
+    let p = o;
+    let underCannon = false;
+    while (p) {
+      if (p.userData && p.userData.isCannon) {
+        underCannon = true;
+        break;
+      }
+      p = p.parent;
+    }
+    if (!underCannon) primitiveVisuals.push(o);
+  });
+  function hidePrimitives() {
+    for (const m of primitiveVisuals) m.visible = false;
   }
 
   // Buoyancy sample offsets (local, on the xz plane).
@@ -201,6 +222,8 @@ export function buildPlayerShip() {
     hatch,
     applyBuoyancy,
     hullTest,
+    hidePrimitives,
+    primitiveVisuals,
     dims: SHIP,
     hitRadius: SHIP.length * 0.55,
   };

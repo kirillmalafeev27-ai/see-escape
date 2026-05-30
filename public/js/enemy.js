@@ -44,13 +44,18 @@ function buildEnemyShip() {
     g.add(b);
   }
 
+  const visuals = [];
+  g.traverse((o) => {
+    if (o.isMesh) visuals.push(o);
+  });
+
   const muzzles = [];
   for (const z of [-12, 12]) {
     for (const sx of [W * 0.45, -W * 0.45]) {
       muzzles.push(new THREE.Vector3(sx, deckY + 2, z));
     }
   }
-  return { group: g, muzzles };
+  return { group: g, muzzles, visuals };
 }
 
 export class EnemyFleet {
@@ -65,10 +70,19 @@ export class EnemyFleet {
     this.spawnTimer = 2;
     this.killCount = 0;
     this._tmp = new THREE.Vector3();
+    this.modelFactory = null; // set once the .glb finishes loading
   }
 
   _spawn() {
     const built = buildEnemyShip();
+    if (this.modelFactory) {
+      try {
+        built.group.add(this.modelFactory());
+        for (const v of built.visuals) v.visible = false;
+      } catch (e) {
+        console.warn("enemy model clone failed, using primitive", e);
+      }
+    }
     this.scene.add(built.group);
     const player = this.getPlayerTarget();
     const ang = Math.random() * Math.PI * 2;

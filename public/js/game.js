@@ -5,9 +5,10 @@ import * as THREE from "three";
 import { createWorld } from "./ocean.js";
 import { EffectsSystem } from "./effects.js";
 import { ProjectileSystem } from "./ballistics.js";
-import { buildPlayerShip } from "./ship.js";
+import { buildPlayerShip, SHIP } from "./ship.js";
 import { EnemyFleet } from "./enemy.js";
 import { PlayerController } from "./player.js";
+import { loadShipModel, makeShipFactory } from "./models.js";
 
 export function startGame(container, hud) {
   const world = createWorld(container);
@@ -33,6 +34,29 @@ export function startGame(container, hud) {
   const getPlayerTarget = () => ({ pos: ship.group.position.clone(), vel: new THREE.Vector3() });
 
   const fleet = new EnemyFleet(scene, sampleWaveHeight, projectiles, effects, getPlayerTarget);
+
+  // Swap in the uploaded pirate-ship models once they load (primitive ships
+  // are the fallback if loading fails). `flip` is a tuning knob for bow facing.
+  loadShipModel("models/stylized_pirate_ship.glb", {
+    targetLength: SHIP.length,
+    keelY: SHIP.hullBottom,
+    flip: false,
+  })
+    .then((m) => {
+      ship.group.add(m);
+      ship.hidePrimitives();
+    })
+    .catch((e) => console.warn("Player ship model failed, keeping primitives:", e));
+
+  makeShipFactory("models/low-poly_pirate_ship.glb", {
+    targetLength: 72,
+    keelY: -9,
+    flip: false,
+  })
+    .then((f) => {
+      fleet.modelFactory = f;
+    })
+    .catch((e) => console.warn("Enemy ship model failed, keeping primitives:", e));
 
   const player = new PlayerController({
     scene,
