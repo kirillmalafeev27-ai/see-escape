@@ -7,7 +7,41 @@ as a **Render web service** (Node + Express). Inspired by
 Tune waves, sky and the sun in real time, then explore the seascape in
 first-person or orbit around it cinematically.
 
-## Features
+## Naval battle (combat core)
+
+`/simulation.html` is now a first-person naval battle prototype built on the
+ocean. You stand on a ship that bobs on the Gerstner waves, walk the deck
+(`WASD` + mouse), man cannons (`E`) and trade fire with an AI enemy fleet.
+
+- **Realistic ballistics** — cannonballs fly on real parabolas under gravity,
+  drifting wind and air drag (`js/ballistics.js`). A live yellow trajectory arc
+  shows exactly where your shot lands so you can lead targets and compensate for
+  wind before firing.
+- **AI enemy fleet** — ships spawn around you, bob on the swell, close to
+  range and fire using a ballistic firing solution that leads the target
+  (`js/enemy.js`). One solid hit and an enemy lists and sinks to the seabed.
+- **Wood debris** — cannonball hits burst into flying splinters, dust and
+  plank chunks that settle on the water, following the wood-debris-explosion
+  skill's particle + lightweight-debris approach (`js/effects.js`).
+- **Buoyant ship** — heave/pitch/roll solved from four wave samples
+  (`js/ship.js`); the player rig is parented to the deck so it rides the motion.
+
+Coming next: hull breaches with a rising-water gauge and patching, and the
+teleport down into the hold interior.
+
+### Module map
+
+```
+js/ocean.js       scene, sky/sun, Gerstner water, sampleWaveHeight
+js/effects.js     particle bursts + wood debris chunks
+js/ballistics.js  projectiles, firing-solution solver, trajectory predictor
+js/ship.js        player ship, cannons, hatch, buoyancy, hull hit-test
+js/enemy.js       enemy fleet spawn / AI fire / sinking
+js/player.js      first-person deck controller, cannon aiming
+js/game.js        orchestration, collisions, wind, HUD, main loop
+```
+
+## Sandbox features (waves)
 
 - **Real 3D waves** — Gerstner-wave vertex displacement on a subdivided mesh,
   so crests physically rise in 3D (not just a normal map). Adjustable height,
