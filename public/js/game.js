@@ -32,6 +32,7 @@ export async function startGame(container, hud) {
   scene.add(ship.group);
   if (playerPivot) {
     ship.group.add(playerPivot);
+    ship.modelPivot = playerPivot;
     ship.hidePrimitives();
   }
 
@@ -156,8 +157,8 @@ export async function startGame(container, hud) {
   function updateHud(dt) {
     const ps = player.getState();
     hud.prompt.textContent = ps.prompt || "";
-    hud.crosshair.style.display = ps.mode === "cannon" ? "block" : "none";
-    hud.reloadWrap.style.display = ps.mode === "cannon" ? "block" : "none";
+    hud.crosshair.style.display = "block";
+    hud.reloadWrap.style.display = "block";
     hud.reloadBar.style.width = `${Math.round(ps.reload * 100)}%`;
 
     hud.score.textContent = `Потоплено: ${state.score}`;
@@ -180,7 +181,7 @@ export async function startGame(container, hud) {
     }
   }
 
-  setMessage("Подойди к пушке (E), целься мышью, стреляй (ЛКМ/Space). Учитывай ветер и дугу!");
+  setMessage("Целься мышью, стреляй (ЛКМ/Space). Жёлтая дуга — куда упадёт ядро. Учитывай ветер!");
   frame();
   return world;
 }
