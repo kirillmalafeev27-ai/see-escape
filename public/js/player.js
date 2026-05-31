@@ -11,6 +11,19 @@ const WALK_SPEED = 14;
 const LOOK_SENS = 0.0022;
 const RELOAD = 1.8;
 const EYE_HEIGHT = 4.2;
+const PLAYER_RADIUS = 0.85;
+const MAX_STEP_UP = 1.5;
+const MAX_STEP_DOWN = 2.6;
+const SUPPORT_HEIGHT_TOLERANCE = 1.1;
+const BODY_RAY_HEIGHTS = [0.8, 2.5];
+const SUPPORT_PROBES = [
+  [0, 0],
+  [PLAYER_RADIUS, 0],
+  [-PLAYER_RADIUS, 0],
+  [0, PLAYER_RADIUS],
+  [0, -PLAYER_RADIUS],
+];
+const LOCAL_DOWN = new THREE.Vector3(0, -1, 0);
 
 export class PlayerController {
   constructor({ scene, camera, ship, domElement, projectiles, effects, getEnv, onMessage }) {
@@ -22,6 +35,8 @@ export class PlayerController {
     this.getEnv = getEnv;
     this.onMessage = onMessage || (() => {});
     this.dims = ship.dims;
+    this.walkableMeshes = ship.walkableMeshes || [];
+    this.solidMeshes = ship.solidMeshes || [];
 
     this.rig = new THREE.Object3D();
     this.rig.position.set(0, this.dims.deckY, this.dims.length * 0.12);
@@ -38,8 +53,12 @@ export class PlayerController {
     this.prompt = "";
 
     this._ray = new THREE.Raycaster();
-    this._down = new THREE.Vector3(0, -1, 0);
-    this._wp = new THREE.Vector3();
+    this._origin = new THREE.Vector3();
+    this._moveDirection = new THREE.Vector3();
+    this._rayDirection = new THREE.Vector3();
+    this._side = new THREE.Vector3();
+    this._candidate = new THREE.Vector3();
+    this._hitPoint = new THREE.Vector3();
 
     // Aim preview line + landing marker (world space).
     this.aimLine = new THREE.Line(
@@ -56,6 +75,7 @@ export class PlayerController {
     scene.add(this.marker);
 
     this._bindInput();
+    this._placeOnDeck();
   }
 
   _bindInput() {
@@ -116,22 +136,93 @@ export class PlayerController {
     this.marker.position.set(last.x, last.y + 0.5, last.z);
   }
 
-  // Stand on the real deck mesh under the player.
+  _castLocal(origin, direction, objects, far) {
+    this.ship.group.updateWorldMatrix(true, false);
+    this._origin.copy(origin);
+    this.ship.group.localToWorld(this._origin);
+    this._rayDirection.copy(direction).transformDirection(this.ship.group.matrixWorld);
+    this._ray.set(this._origin, this._rayDirection);
+    this._ray.far = far;
+    return this._ray.intersectObjects(objects, false);
+  }
+
+  _groundAt(position, stepUp = MAX_STEP_UP, stepDown = MAX_STEP_DOWN) {
+    let groundY = null;
+    for (const [dx, dz] of SUPPORT_PROBES) {
+      this._origin.set(position.x + dx, position.y + stepUp + 0.05, position.z + dz);
+      const hits = this._castLocal(this._origin, LOCAL_DOWN, this.walkableMeshes, stepUp + stepDown + 0.1);
+      if (!hits.length) return null;
+      this._hitPoint.copy(hits[0].point);
+      this.ship.group.worldToLocal(this._hitPoint);
+      if (groundY === null) {
+        groundY = this._hitPoint.y;
+      } else if (Math.abs(this._hitPoint.y - groundY) > SUPPORT_HEIGHT_TOLERANCE) {
+        return null;
+      }
+    }
+    return groundY;
+  }
+
+  _hasObstacle(from, to) {
+    if (!this.solidMeshes.length) return false;
+    const dx = to.x - from.x;
+    const dz = to.z - from.z;
+    const distance = Math.hypot(dx, dz);
+    if (distance < 1e-5) return false;
+
+    this._moveDirection.set(dx / distance, 0, dz / distance);
+    this._side.set(-this._moveDirection.z, 0, this._moveDirection.x);
+    for (const lateral of [-PLAYER_RADIUS, 0, PLAYER_RADIUS]) {
+      for (const height of BODY_RAY_HEIGHTS) {
+        this._origin.set(
+          from.x + this._side.x * lateral,
+          from.y + height,
+          from.z + this._side.z * lateral
+        );
+        if (this._castLocal(this._origin, this._moveDirection, this.solidMeshes, distance + PLAYER_RADIUS).length) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  _tryMove(dx, dz) {
+    if (!dx && !dz) return false;
+    this._candidate.set(this.rig.position.x + dx, this.rig.position.y, this.rig.position.z + dz);
+    const groundY = this._groundAt(this._candidate);
+    if (groundY === null) return false;
+    this._candidate.y = groundY;
+    if (this._hasObstacle(this.rig.position, this._candidate)) return false;
+    this.rig.position.copy(this._candidate);
+    return true;
+  }
+
+  _placeOnDeck() {
+    if (!this.walkableMeshes.length) return;
+    this.ship.group.updateMatrixWorld(true);
+    for (const z of [this.dims.length * 0.12, 0, -this.dims.length * 0.12, this.dims.length * 0.24]) {
+      for (const x of [0, -this.dims.beam * 0.14, this.dims.beam * 0.14]) {
+        this._candidate.set(x, this.dims.deckY, z);
+        const groundY = this._groundAt(this._candidate, 30, 60);
+        if (groundY !== null) {
+          this.rig.position.set(x, groundY, z);
+          return;
+        }
+      }
+    }
+  }
+
+  // Keep the rig on the deck in ship-local space so pitch and roll do not
+  // turn world-down into a sideways slide across the model.
   _groundFollow() {
     this.rig.rotation.set(0, this.yaw, 0);
-    this.rig.updateWorldMatrix(true, false);
-    if (!this.ship.modelPivot) {
+    if (!this.walkableMeshes.length) {
       this.rig.position.y = this.dims.deckY;
       return;
     }
-    this.rig.getWorldPosition(this._wp);
-    this._ray.set(new THREE.Vector3(this._wp.x, this._wp.y + 6, this._wp.z), this._down);
-    this._ray.far = 60;
-    const hits = this._ray.intersectObject(this.ship.modelPivot, true);
-    if (hits.length) {
-      const local = this.ship.group.worldToLocal(hits[0].point.clone());
-      this.rig.position.y = local.y;
-    }
+    const groundY = this._groundAt(this.rig.position);
+    if (groundY !== null) this.rig.position.y = groundY;
   }
 
   update(dt) {
@@ -145,13 +236,22 @@ export class PlayerController {
       const right = new THREE.Vector3(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
       const move = fwd.multiplyScalar(f).add(right.multiplyScalar(s));
       if (move.lengthSq() > 0) move.normalize().multiplyScalar(WALK_SPEED * dt);
-      this.rig.position.x += move.x;
-      this.rig.position.z += move.z;
+      if (this.walkableMeshes.length) {
+        if (!this._tryMove(move.x, move.z)) {
+          this._tryMove(move.x, 0);
+          this._tryMove(0, move.z);
+        }
+      } else {
+        this.rig.position.x += move.x;
+        this.rig.position.z += move.z;
+      }
     }
-    const bx = this.dims.beam * 0.42;
-    const bz = this.dims.length * 0.46;
-    this.rig.position.x = THREE.MathUtils.clamp(this.rig.position.x, -bx, bx);
-    this.rig.position.z = THREE.MathUtils.clamp(this.rig.position.z, -bz, bz);
+    if (!this.walkableMeshes.length) {
+      const bx = this.dims.beam * 0.42;
+      const bz = this.dims.length * 0.46;
+      this.rig.position.x = THREE.MathUtils.clamp(this.rig.position.x, -bx, bx);
+      this.rig.position.z = THREE.MathUtils.clamp(this.rig.position.z, -bz, bz);
+    }
 
     this._groundFollow();
     this.camera.rotation.set(this.pitch, 0, 0);

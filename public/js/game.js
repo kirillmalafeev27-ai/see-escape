@@ -17,6 +17,8 @@ export async function startGame(container, hud) {
   // Load + measure the player ship model so all gameplay fits the real model.
   let playerDims = { ...SHIP_DEFAULTS };
   let playerPivot = null;
+  let playerWalkableMeshes = [];
+  let playerSolidMeshes = [];
   try {
     const r = await loadAndAnalyzeShip("models/stylized_pirate_ship.glb", {
       targetLength: 96,
@@ -24,6 +26,8 @@ export async function startGame(container, hud) {
     });
     playerDims = r.dims;
     playerPivot = r.pivot;
+    playerWalkableMeshes = r.walkableMeshes;
+    playerSolidMeshes = r.solidMeshes;
   } catch (e) {
     console.warn("Player ship model failed, using primitives:", e);
   }
@@ -33,6 +37,8 @@ export async function startGame(container, hud) {
   if (playerPivot) {
     ship.group.add(playerPivot);
     ship.modelPivot = playerPivot;
+    ship.walkableMeshes = playerWalkableMeshes;
+    ship.solidMeshes = playerSolidMeshes;
     ship.hidePrimitives();
   }
 

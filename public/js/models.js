@@ -23,10 +23,39 @@ function loadGLTF(url) {
 }
 
 const DOWN = new THREE.Vector3(0, -1, 0);
+const NON_SHIP_NODE = /(?:water|ocean|sea|ground)(?:[\s_-]*plane)?/i;
+const WALKABLE_NODE = /(?:floor|stairs|deck)/i;
+const NON_SOLID_NODE = /(?:sail|flag|wire|rope)/i;
+
+function removeNonShipNodes(parent) {
+  for (const child of [...parent.children]) {
+    if (NON_SHIP_NODE.test(child.name || "")) {
+      parent.remove(child);
+      continue;
+    }
+    removeNonShipNodes(child);
+  }
+}
+
+function collectNavigationMeshes(root) {
+  const walkableMeshes = [];
+  const solidMeshes = [];
+  root.traverse((o) => {
+    if (!o.isMesh) return;
+    if (WALKABLE_NODE.test(o.name || "")) {
+      walkableMeshes.push(o);
+    } else if (!NON_SOLID_NODE.test(o.name || "")) {
+      solidMeshes.push(o);
+    }
+  });
+  return { walkableMeshes, solidMeshes };
+}
 
 export async function loadAndAnalyzeShip(url, { targetLength, flip = false, draftFraction = 0.4 }) {
   const gltf = await loadGLTF(url);
   const root = gltf.scene.clone(true);
+  removeNonShipNodes(root);
+  const { walkableMeshes, solidMeshes } = collectNavigationMeshes(root);
 
   // Wrap so we manipulate wrappers, never assume anything about the root's own
   // transform. inner = recenter/orient, pivot = scale + waterline drop.
@@ -71,7 +100,7 @@ export async function loadAndAnalyzeShip(url, { targetLength, flip = false, draf
   for (const fx of [-0.32, -0.18, 0.18, 0.32]) {
     for (const fz of [-0.3, -0.12, 0.12, 0.3]) {
       ray.set(new THREE.Vector3(fx * beam, top, fz * length), DOWN);
-      const hits = ray.intersectObject(inner, true);
+      const hits = ray.intersectObjects(walkableMeshes, false);
       if (hits.length) hitsY.push(hits[0].point.y);
     }
   }
@@ -81,14 +110,18 @@ export async function loadAndAnalyzeShip(url, { targetLength, flip = false, draf
   // Sink the hull so the waterline sits at y = 0.
   const draft = draftFraction * deckRaw;
   pivot.position.y = -draft;
+  pivot.updateMatrixWorld(true);
 
   pivot.traverse((o) => {
     if (o.isMesh) {
       o.castShadow = o.receiveShadow = false;
-      if (o.material) o.material.side = THREE.FrontSide;
+      const materials = Array.isArray(o.material) ? o.material : [o.material];
+      for (const material of materials) {
+        if (material) material.side = THREE.FrontSide;
+      }
     }
   });
 
   const dims = { length, beam, deckY: deckRaw - draft, keelY: -draft };
-  return { pivot, dims };
+  return { pivot, dims, walkableMeshes, solidMeshes };
 }

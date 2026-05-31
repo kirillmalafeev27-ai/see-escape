@@ -88,6 +88,8 @@ export function buildPlayerShip(dims) {
   return {
     group,
     modelPivot: null, // set by game when the .glb attaches
+    walkableMeshes: [],
+    solidMeshes: [],
     applyBuoyancy,
     hullTest,
     hidePrimitives,
