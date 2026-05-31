@@ -3,8 +3,7 @@
 // press E to man a nearby cannon, aim it with the mouse (a live predicted
 // trajectory shows exactly where the shot lands), and fire with click / Space.
 import * as THREE from "three";
-import { predictTrajectory, GRAVITY } from "./ballistics.js";
-import { SHIP } from "./ship.js";
+import { predictTrajectory } from "./ballistics.js";
 
 const PLAYER_MUZZLE_SPEED = 235;
 const WALK_SPEED = 16;
@@ -22,8 +21,9 @@ export class PlayerController {
     this.getEnv = getEnv;
     this.onMessage = onMessage || (() => {});
 
+    this.dims = ship.dims;
     this.rig = new THREE.Object3D();
-    this.rig.position.set(0, SHIP.deckY, 18);
+    this.rig.position.set(0, this.dims.deckY, this.dims.length * 0.18);
     ship.group.add(this.rig);
     this.rig.add(camera);
     camera.position.set(0, 6, 0);
@@ -192,11 +192,11 @@ export class PlayerController {
         this.rig.position.z += move.z;
       }
       // keep on deck
-      const bx = SHIP.beam * 0.4;
-      const bz = SHIP.length * 0.42;
+      const bx = this.dims.beam * 0.38;
+      const bz = this.dims.length * 0.42;
       this.rig.position.x = THREE.MathUtils.clamp(this.rig.position.x, -bx, bx);
       this.rig.position.z = THREE.MathUtils.clamp(this.rig.position.z, -bz, bz);
-      this.rig.position.y = SHIP.deckY;
+      this.rig.position.y = this.dims.deckY;
       this.rig.rotation.set(0, this.yaw, 0);
       this.camera.rotation.set(this.pitch, 0, 0);
 
@@ -220,7 +220,7 @@ export class PlayerController {
       c.root.rotation.y = c.baseYaw + c.yaw;
       c.pitch.rotation.x = -c.pitchAngle;
       // place the eye just behind the breech, looking along the barrel
-      this.rig.position.set(c.localPos.x, SHIP.deckY, c.localPos.z);
+      this.rig.position.set(c.localPos.x, this.dims.deckY, c.localPos.z);
       this.rig.rotation.set(0, c.baseYaw + c.yaw, 0);
       this.camera.rotation.set(c.pitchAngle, 0, 0);
       this._updateAimPreview();

@@ -5,58 +5,67 @@ import * as THREE from "three";
 import { createWorld } from "./ocean.js";
 import { EffectsSystem } from "./effects.js";
 import { ProjectileSystem } from "./ballistics.js";
-import { buildPlayerShip, SHIP } from "./ship.js";
+import { buildPlayerShip, SHIP_DEFAULTS } from "./ship.js";
 import { EnemyFleet } from "./enemy.js";
 import { PlayerController } from "./player.js";
-import { loadShipModel, makeShipFactory } from "./models.js";
+import { loadAndAnalyzeShip } from "./models.js";
 
-export function startGame(container, hud) {
+export async function startGame(container, hud) {
   const world = createWorld(container);
   const { scene, camera, renderer, sampleWaveHeight, advanceTime } = world;
 
-  // Player ship at the origin; it stays on station and bobs on the swell.
-  const ship = buildPlayerShip();
+  // Load + measure the player ship model so all gameplay fits the real model.
+  let playerDims = { ...SHIP_DEFAULTS };
+  let playerPivot = null;
+  try {
+    const r = await loadAndAnalyzeShip("models/stylized_pirate_ship.glb", {
+      targetLength: 96,
+      flip: false,
+    });
+    playerDims = r.dims;
+    playerPivot = r.pivot;
+  } catch (e) {
+    console.warn("Player ship model failed, using primitives:", e);
+  }
+
+  const ship = buildPlayerShip(playerDims);
   scene.add(ship.group);
+  if (playerPivot) {
+    ship.group.add(playerPivot);
+    ship.hidePrimitives();
+  }
 
   const effects = new EffectsSystem(scene, sampleWaveHeight);
   const projectiles = new ProjectileSystem(scene);
 
-  // Slowly drifting wind that nudges every cannonball (player can read it off
-  // the HUD and the aim preview already bakes it in).
+  // Slowly drifting wind that nudges every cannonball (player reads it off the
+  // HUD; the aim preview already bakes it in).
   const wind = new THREE.Vector3(3, 0, 1);
   const windTarget = new THREE.Vector3(3, 0, 1);
   let windTimer = 0;
 
   const getEnv = () => ({ wind, sampleWaveHeight });
-
   const state = { score: 0, integrity: 100, over: false };
-
   const getPlayerTarget = () => ({ pos: ship.group.position.clone(), vel: new THREE.Vector3() });
 
-  const fleet = new EnemyFleet(scene, sampleWaveHeight, projectiles, effects, getPlayerTarget);
+  // Load + measure the enemy ship model (cheap clones per spawn).
+  let enemyDims = { length: 72, beam: 18, deckY: 9, keelY: -9 };
+  let enemyFactory = null;
+  try {
+    const r = await loadAndAnalyzeShip("models/low-poly_pirate_ship.glb", {
+      targetLength: 72,
+      flip: false,
+    });
+    enemyDims = r.dims;
+    enemyFactory = () => r.pivot.clone(true);
+  } catch (e) {
+    console.warn("Enemy ship model failed, using primitives:", e);
+  }
 
-  // Swap in the uploaded pirate-ship models once they load (primitive ships
-  // are the fallback if loading fails). `flip` is a tuning knob for bow facing.
-  loadShipModel("models/stylized_pirate_ship.glb", {
-    targetLength: SHIP.length,
-    keelY: SHIP.hullBottom,
-    flip: false,
-  })
-    .then((m) => {
-      ship.group.add(m);
-      ship.hidePrimitives();
-    })
-    .catch((e) => console.warn("Player ship model failed, keeping primitives:", e));
-
-  makeShipFactory("models/low-poly_pirate_ship.glb", {
-    targetLength: 72,
-    keelY: -9,
-    flip: false,
-  })
-    .then((f) => {
-      fleet.modelFactory = f;
-    })
-    .catch((e) => console.warn("Enemy ship model failed, keeping primitives:", e));
+  const fleet = new EnemyFleet(scene, sampleWaveHeight, projectiles, effects, getPlayerTarget, {
+    dims: enemyDims,
+    factory: enemyFactory,
+  });
 
   const player = new PlayerController({
     scene,
@@ -73,10 +82,7 @@ export function startGame(container, hud) {
   const projEnv = {
     wind,
     sampleWaveHeight,
-    hitTest: (proj) => {
-      if (proj.team === "player") return fleet.hitTest(proj);
-      return ship.hullTest(proj.pos);
-    },
+    hitTest: (proj) => (proj.team === "player" ? fleet.hitTest(proj) : ship.hullTest(proj.pos)),
     onHit: (proj, hit) => {
       if (proj.team === "player") {
         effects.woodImpact(hit.point, hit.normal, 1.4);
@@ -88,9 +94,7 @@ export function startGame(container, hud) {
         registerPlayerHit();
       }
     },
-    onWater: (proj, point) => {
-      effects.waterSplash(point, proj.team === "enemy" ? 0.9 : 0.7);
-    },
+    onWater: (proj, point) => effects.waterSplash(point, proj.team === "enemy" ? 0.9 : 0.7),
   };
 
   function registerPlayerHit() {
@@ -129,7 +133,6 @@ export function startGame(container, hud) {
     if (!state.over) {
       advanceTime(dt);
 
-      // wind drift
       windTimer -= dt;
       if (windTimer <= 0) {
         windTarget.set((Math.random() - 0.5) * 10, 0, (Math.random() - 0.5) * 10);
@@ -137,8 +140,6 @@ export function startGame(container, hud) {
       }
       wind.lerp(windTarget, 1 - Math.exp(-0.4 * dt));
 
-      // player ship buoyancy, then make sure world matrices are fresh for
-      // muzzle/aim transforms read this frame
       ship.applyBuoyancy(sampleWaveHeight);
       ship.group.updateMatrixWorld(true);
 
@@ -166,7 +167,7 @@ export function startGame(container, hud) {
     hud.enemies.textContent = `Врагов на воде: ${fleet.list.filter((e) => !e.sinking).length}`;
 
     const mag = Math.hypot(wind.x, wind.z);
-    const ang = Math.atan2(wind.x, -wind.z); // 0 = north(-z)
+    const ang = Math.atan2(wind.x, -wind.z);
     hud.windArrow.style.transform = `rotate(${ang}rad)`;
     hud.windText.textContent = `${mag.toFixed(1)} м/с`;
 
@@ -175,8 +176,7 @@ export function startGame(container, hud) {
       if (msgTimer <= 0) hud.msg.style.opacity = "0";
     }
     if (hud.flash.style.opacity && parseFloat(hud.flash.style.opacity) > 0) {
-      const v = Math.max(0, parseFloat(hud.flash.style.opacity) - dt * 1.2);
-      hud.flash.style.opacity = String(v);
+      hud.flash.style.opacity = String(Math.max(0, parseFloat(hud.flash.style.opacity) - dt * 1.2));
     }
   }
 

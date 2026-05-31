@@ -126,16 +126,17 @@
         gameover: $("gameover"),
       };
 
-      try {
-        startGame($("app"), hud);
-        loaderEl.classList.add("hidden");
-        setTimeout(() => (loaderEl.style.display = "none"), 700);
-      } catch (e) {
-        console.error(e);
-        loaderEl.style.display = "none";
-        $("err").style.display = "flex";
-        $("errmsg").textContent = (e && e.stack) || String(e);
-      }
+      startGame($("app"), hud)
+        .then(() => {
+          loaderEl.classList.add("hidden");
+          setTimeout(() => (loaderEl.style.display = "none"), 700);
+        })
+        .catch((e) => {
+          console.error(e);
+          loaderEl.style.display = "none";
+          $("err").style.display = "flex";
+          $("errmsg").textContent = (e && e.stack) || String(e);
+        });
     </script>
   </body>
 </html>
