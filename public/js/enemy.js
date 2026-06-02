@@ -9,6 +9,9 @@ import { solveLaunchVelocity } from "./ballistics.js";
 const ENEMY_DEFAULTS = { length: 72, beam: 18, deckY: 9, keelY: -9 };
 const MUZZLE_SPEED = 205;
 const STANDOFF = 380;
+const BUOYANCY_RESPONSE = 3.5;
+const HULL_BULWARK = 5;
+const SAIL_BASE_CLEARANCE = 4;
 
 function mat(c, r = 0.85, m = 0) {
   return new THREE.MeshStandardMaterial({ color: c, roughness: r, metalness: m });
@@ -85,11 +88,12 @@ export class EnemyFleet {
       list: 0,
       halfL: this.dims.length * 0.42,
       halfW: this.dims.beam * 0.42,
+      buoyancyReady: false,
       accuracy: 0.04 + Math.random() * 0.05,
     });
   }
 
-  _buoyancy(e) {
+  _buoyancy(e, dt) {
     const g = e.group;
     const a = g.rotation.y;
     const s = Math.sin(a), c = Math.cos(a);
@@ -97,9 +101,20 @@ export class EnemyFleet {
     const h = (lx, lz) => this.sample(px + (lx * c + lz * s), pz + (-lx * s + lz * c));
     const bow = h(0, e.halfL), stern = h(0, -e.halfL);
     const stbd = h(e.halfW, 0), port = h(-e.halfW, 0);
-    g.position.y = (bow + stern + stbd + port) / 4;
-    g.rotation.x = Math.atan2(stern - bow, e.halfL * 2) * 0.8;
-    g.rotation.z = Math.atan2(stbd - port, e.halfW * 2) * 0.8 + e.list;
+    const targetY = (bow + stern + stbd + port) / 4;
+    const targetPitch = Math.atan2(stern - bow, e.halfL * 2) * 0.8;
+    const targetRoll = Math.atan2(stbd - port, e.halfW * 2) * 0.8 + e.list;
+    if (!e.buoyancyReady) {
+      g.position.y = targetY;
+      g.rotation.x = targetPitch;
+      g.rotation.z = targetRoll;
+      e.buoyancyReady = true;
+      return;
+    }
+    const alpha = 1 - Math.exp(-BUOYANCY_RESPONSE * Math.max(0, dt));
+    g.position.y = THREE.MathUtils.lerp(g.position.y, targetY, alpha);
+    g.rotation.x = THREE.MathUtils.lerp(g.rotation.x, targetPitch, alpha);
+    g.rotation.z = THREE.MathUtils.lerp(g.rotation.z, targetRoll, alpha);
   }
 
   _fire(e) {
@@ -128,10 +143,35 @@ export class EnemyFleet {
   hitTest(proj) {
     for (const e of this.list) {
       if (e.sinking) continue;
-      const r = this.dims.length * 0.5;
-      if (e.group.position.distanceTo(proj.pos) < r) {
-        const normal = proj.pos.clone().sub(e.group.position).setY(0).normalize();
-        return { enemy: e, point: proj.pos.clone(), normal };
+      const d = this.dims;
+      if (e.group.position.distanceTo(proj.pos) > d.length * 1.4) continue;
+
+      e.group.updateMatrixWorld(true);
+      const local = e.group.worldToLocal(proj.pos.clone());
+      const radius = proj.radius || 0;
+      const inHull =
+        Math.abs(local.x) <= d.beam * 0.62 + radius &&
+        Math.abs(local.z) <= d.length * 0.52 + radius &&
+        local.y >= d.keelY - radius &&
+        local.y <= d.deckY + HULL_BULWARK + radius;
+      if (inHull) {
+        const nx = local.x / Math.max(1, d.beam * 0.62);
+        const nz = local.z / Math.max(1, d.length * 0.52);
+        const normal = Math.abs(nx) > Math.abs(nz)
+          ? new THREE.Vector3(Math.sign(nx) || 1, 0, 0)
+          : new THREE.Vector3(0, 0, Math.sign(nz) || 1);
+        normal.transformDirection(e.group.matrixWorld);
+        return { enemy: e, kind: "hull", point: proj.pos.clone(), normal };
+      }
+
+      const inSails =
+        Math.abs(local.x) <= d.beam * 1.7 + radius &&
+        Math.abs(local.z) <= d.length * 0.48 + radius &&
+        local.y >= d.deckY + SAIL_BASE_CLEARANCE - radius &&
+        local.y <= d.deckY + d.length * 0.9 + radius;
+      if (inSails) {
+        const normal = proj.vel.clone().normalize().multiplyScalar(-1);
+        return { enemy: e, kind: "sail", point: proj.pos.clone(), normal };
       }
     }
     return null;
@@ -182,7 +222,7 @@ export class EnemyFleet {
       const speed = dist > STANDOFF ? 26 : -4;
       e.group.position.addScaledVector(fwd, speed * dt);
 
-      this._buoyancy(e);
+      this._buoyancy(e, dt);
 
       e.reload -= dt;
       if (e.reload <= 0 && dist < 760) {

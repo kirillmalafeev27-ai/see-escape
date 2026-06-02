@@ -3,12 +3,13 @@
 // realistic cannonball fire, wood-debris impacts, and the HUD/main loop.
 import * as THREE from "three";
 import { createWorld } from "./ocean.js";
-import { EffectsSystem } from "./effects.js";
+import { EffectsSystem } from "./effects.js?v=20260602-damage-control-v2";
 import { ProjectileSystem } from "./ballistics.js";
-import { buildPlayerShip, SHIP_DEFAULTS } from "./ship.js";
+import { buildPlayerShip, SHIP_DEFAULTS } from "./ship.js?v=20260601-model-cannons";
 import { EnemyFleet } from "./enemy.js";
-import { PlayerController } from "./player.js";
-import { loadAndAnalyzeShip } from "./models.js";
+import { PlayerController } from "./player.js?v=20260602-damage-control-v2";
+import { DamageControlSystem } from "./damage-control.js?v=20260602-damage-control-v2";
+import { loadAndAnalyzeShip } from "./models.js?v=20260602-damage-control-v2";
 
 export async function startGame(container, hud) {
   const world = createWorld(container);
@@ -17,6 +18,11 @@ export async function startGame(container, hud) {
   // Load + measure the player ship model so all gameplay fits the real model.
   let playerDims = { ...SHIP_DEFAULTS };
   let playerPivot = null;
+  let playerNavigationRoot = null;
+  let playerWalkableMeshes = [];
+  let playerSolidMeshes = [];
+  let playerStairZones = [];
+  let playerCannonTemplate = null;
   try {
     const r = await loadAndAnalyzeShip("models/stylized_pirate_ship.glb", {
       targetLength: 96,
@@ -24,20 +30,36 @@ export async function startGame(container, hud) {
     });
     playerDims = r.dims;
     playerPivot = r.pivot;
+    playerNavigationRoot = r.navigationRoot;
+    playerWalkableMeshes = r.walkableMeshes;
+    playerSolidMeshes = r.solidMeshes;
+    playerStairZones = r.stairZones;
+    playerCannonTemplate = r.cannonTemplate;
   } catch (e) {
     console.warn("Player ship model failed, using primitives:", e);
   }
 
-  const ship = buildPlayerShip(playerDims);
+  const ship = buildPlayerShip(playerDims, { cannonTemplate: playerCannonTemplate });
   scene.add(ship.group);
   if (playerPivot) {
     ship.group.add(playerPivot);
+    if (playerNavigationRoot) ship.group.add(playerNavigationRoot);
     ship.modelPivot = playerPivot;
+    ship.walkableMeshes = playerWalkableMeshes;
+    ship.stairZones = playerStairZones;
+    ship.solidMeshes = [...playerSolidMeshes, ...ship.cannonSolidMeshes];
+    ship.snapCannonsToDeck(playerWalkableMeshes);
     ship.hidePrimitives();
   }
 
   const effects = new EffectsSystem(scene, sampleWaveHeight);
   const projectiles = new ProjectileSystem(scene);
+  const damageControl = new DamageControlSystem({
+    scene,
+    ship,
+    effects,
+    onMessage: (m) => m && setMessage(m),
+  });
 
   // Slowly drifting wind that nudges every cannonball (player reads it off the
   // HUD; the aim preview already bakes it in).
@@ -46,7 +68,7 @@ export async function startGame(container, hud) {
   let windTimer = 0;
 
   const getEnv = () => ({ wind, sampleWaveHeight });
-  const state = { score: 0, integrity: 100, over: false };
+  const state = { score: 0, over: false };
   const getPlayerTarget = () => ({ pos: ship.group.position.clone(), vel: new THREE.Vector3() });
 
   // Load + measure the enemy ship model (cheap clones per spawn).
@@ -76,6 +98,9 @@ export async function startGame(container, hud) {
     projectiles,
     effects,
     getEnv,
+    fireButton: hud.fireButton,
+    jumpButton: hud.jumpButton,
+    damageControl,
     onMessage: (m) => m && setMessage(m),
   });
 
@@ -86,29 +111,34 @@ export async function startGame(container, hud) {
     hitTest: (proj) => (proj.team === "player" ? fleet.hitTest(proj) : ship.hullTest(proj.pos)),
     onHit: (proj, hit) => {
       if (proj.team === "player") {
-        effects.woodImpact(hit.point, hit.normal, 1.4);
+        if (hit.kind === "sail") {
+          effects.woodImpact(hit.point, hit.normal, 0.9);
+          setMessage("Попадание по парусам: корпус врага не повреждён.");
+          return;
+        }
+        effects.woodImpact(hit.point, hit.normal, 2.7);
         fleet.sink(hit.enemy);
         state.score++;
         setMessage("Прямое попадание! Враг идёт ко дну ⚓");
       } else {
         effects.woodImpact(hit.point, hit.normal, 1.2);
-        registerPlayerHit();
+        registerPlayerHit(hit);
       }
     },
     onWater: (proj, point) => effects.waterSplash(point, proj.team === "enemy" ? 0.9 : 0.7),
   };
 
-  function registerPlayerHit() {
-    state.integrity -= 18;
+  function registerPlayerHit(hit) {
+    damageControl.addBreach(hit);
     flash();
-    if (state.integrity <= 0 && !state.over) {
-      state.integrity = 0;
-      state.over = true;
-      hud.gameover.style.display = "flex";
-      document.exitPointerLock?.();
-    } else {
-      setMessage("Пробоина в корпусе! (откачка появится в след. обновлении)");
-    }
+    setMessage("Пробоина в корпусе! Спускайся в трюм: возьми доску и заколоти течь.");
+  }
+
+  function loseToFlooding() {
+    if (state.over) return;
+    state.over = true;
+    hud.gameover.style.display = "flex";
+    document.exitPointerLock?.();
   }
 
   // ---- HUD helpers ----
@@ -141,12 +171,14 @@ export async function startGame(container, hud) {
       }
       wind.lerp(windTarget, 1 - Math.exp(-0.4 * dt));
 
-      ship.applyBuoyancy(sampleWaveHeight);
+      ship.applyBuoyancy(sampleWaveHeight, dt);
       ship.group.updateMatrixWorld(true);
 
       player.update(dt);
       fleet.update(dt, () => {});
       projectiles.update(dt, projEnv);
+      damageControl.update(dt);
+      if (damageControl.waterLevel >= 100) loseToFlooding();
       effects.update(dt);
 
       updateHud(dt);
@@ -156,15 +188,21 @@ export async function startGame(container, hud) {
 
   function updateHud(dt) {
     const ps = player.getState();
+    const dc = damageControl.getState();
     hud.prompt.textContent = ps.prompt || "";
     hud.crosshair.style.display = "block";
-    hud.reloadWrap.style.display = "block";
+    hud.reloadWrap.style.display = ps.nearCannon ? "block" : "none";
     hud.reloadBar.style.width = `${Math.round(ps.reload * 100)}%`;
+    hud.fireButton.style.display = ps.nearCannon ? "block" : "none";
+    hud.fireButton.disabled = !ps.canFire;
+    hud.fireButton.textContent = ps.fireLabel;
+    hud.jumpButton.disabled = !ps.canJump;
 
     hud.score.textContent = `Потоплено: ${state.score}`;
-    hud.integrityBar.style.width = `${state.integrity}%`;
+    hud.integrityBar.style.width = `${dc.waterLevel}%`;
     hud.integrityBar.style.background =
-      state.integrity > 50 ? "#4fd07a" : state.integrity > 25 ? "#e8c25a" : "#e85a5a";
+      dc.waterLevel < 35 ? "#4aa9d9" : dc.waterLevel < 70 ? "#e8c25a" : "#e85a5a";
+    hud.floodLabel.textContent = `Вода в трюме: ${Math.round(dc.waterLevel)}% · пробоин: ${dc.activeBreaches}`;
     hud.enemies.textContent = `Врагов на воде: ${fleet.list.filter((e) => !e.sinking).length}`;
 
     const mag = Math.hypot(wind.x, wind.z);
@@ -181,7 +219,7 @@ export async function startGame(container, hud) {
     }
   }
 
-  setMessage("Целься мышью, стреляй (ЛКМ/Space). Жёлтая дуга — куда упадёт ядро. Учитывай ветер!");
+  setMessage("Подойди к пушке и нажми E. При пробоине открой двери трюма, возьми доску или вычерпывай воду.");
   frame();
   return world;
 }

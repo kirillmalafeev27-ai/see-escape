@@ -7,6 +7,7 @@ import * as THREE from "three";
 
 export const SHIP_DEFAULTS = { length: 96, beam: 28, deckY: 12, keelY: -10 };
 const BULWARK = 5;
+const BUOYANCY_RESPONSE = 4.5;
 
 function mat(color, rough = 0.85, metal = 0.0) {
   return new THREE.MeshStandardMaterial({ color, roughness: rough, metalness: metal });
@@ -27,7 +28,124 @@ function buildFallbackHull(group, d) {
   }
 }
 
-export function buildPlayerShip(dims) {
+function buildCannons(group, d, cannonTemplate = null) {
+  const battery = new THREE.Group();
+  battery.name = "PlayerCannons";
+  group.add(battery);
+
+  const barrelGeo = new THREE.CylinderGeometry(0.48, 0.72, 6.4, 12);
+  const carriageGeo = new THREE.BoxGeometry(3.1, 1.05, 2.2);
+  const axleGeo = new THREE.CylinderGeometry(0.2, 0.2, 2.9, 8);
+  const wheelGeo = new THREE.CylinderGeometry(0.7, 0.7, 0.28, 12);
+  const barrelMat = mat(0x20252b, 0.42, 0.62);
+  const woodMat = mat(0x6b351f, 0.82);
+  const darkWoodMat = mat(0x452416, 0.88);
+  const cannons = [];
+  const solidMeshes = [];
+
+  function addSolid(cannon, mesh) {
+    cannon.add(mesh);
+    solidMeshes.push(mesh);
+  }
+
+  function addModelVisual(yawPivot) {
+    const visual = cannonTemplate.clone(true);
+    visual.position.y = -yawPivot.position.y;
+    yawPivot.add(visual);
+    visual.traverse((o) => {
+      if (o.isMesh) solidMeshes.push(o);
+    });
+  }
+
+  function addCannon({ x, z, baseYaw, traverse, name }) {
+    const cannon = new THREE.Group();
+    cannon.name = name;
+    cannon.position.set(x, d.deckY, z);
+    cannon.rotation.y = baseYaw - Math.PI / 2;
+    battery.add(cannon);
+
+    const yawPivot = new THREE.Group();
+    yawPivot.position.y = 1.62;
+    cannon.add(yawPivot);
+
+    const pitchPivot = new THREE.Group();
+    yawPivot.add(pitchPivot);
+
+    if (cannonTemplate) {
+      addModelVisual(yawPivot);
+    } else {
+      const carriage = new THREE.Mesh(carriageGeo, woodMat);
+      carriage.position.set(-0.45, 0.72, 0);
+      addSolid(cannon, carriage);
+
+      const axle = new THREE.Mesh(axleGeo, darkWoodMat);
+      axle.position.set(-0.45, 0.58, 0);
+      axle.rotation.x = Math.PI / 2;
+      addSolid(cannon, axle);
+
+      for (const wheelZ of [-1.18, 1.18]) {
+        const wheel = new THREE.Mesh(wheelGeo, darkWoodMat);
+        wheel.position.set(-0.45, 0.58, wheelZ);
+        wheel.rotation.x = Math.PI / 2;
+        addSolid(cannon, wheel);
+      }
+
+      const barrel = new THREE.Mesh(barrelGeo, barrelMat);
+      barrel.position.x = 1.65;
+      barrel.rotation.z = -Math.PI / 2;
+      pitchPivot.add(barrel);
+    }
+
+    const muzzle = new THREE.Object3D();
+    muzzle.position.x = 4.85;
+    pitchPivot.add(muzzle);
+
+    cannons.push({
+      name,
+      mount: cannon,
+      yawPivot,
+      pitchPivot,
+      muzzle,
+      baseYaw,
+      traverse,
+      reload: 0,
+      disabled: false,
+    });
+  }
+
+  const cannonTraverse = THREE.MathUtils.degToRad(90);
+  for (const side of [-1, 1]) {
+    const baseYaw = side * Math.PI / 2;
+    for (const z of [-0.38, -0.23, -0.08, 0.06, 0.18, 0.27].map((fraction) => fraction * d.length)) {
+      addCannon({
+        x: side * d.beam * 0.43,
+        z,
+        baseYaw,
+        traverse: cannonTraverse,
+        name: side < 0 ? "Port broadside cannon" : "Starboard broadside cannon",
+      });
+    }
+  }
+
+  // Swivel chase guns cover the fore and aft blind spots of the broadsides.
+  addCannon({
+    x: 0,
+    z: d.length * 0.23,
+    baseYaw: 0,
+    traverse: cannonTraverse,
+    name: "Bow chase cannon",
+  });
+  addCannon({
+    x: 0,
+    z: -d.length * 0.39,
+    baseYaw: Math.PI,
+    traverse: cannonTraverse,
+    name: "Stern chase cannon",
+  });
+  return { cannons, solidMeshes };
+}
+
+export function buildPlayerShip(dims, { cannonTemplate = null } = {}) {
   const d = { ...SHIP_DEFAULTS, ...dims };
   const group = new THREE.Group();
   group.rotation.order = "YXZ";
@@ -42,15 +160,46 @@ export function buildPlayerShip(dims) {
   function hidePrimitives() {
     for (const m of primitiveVisuals) m.visible = false;
   }
+  const { cannons, solidMeshes: cannonSolidMeshes } = buildCannons(group, d, cannonTemplate);
+
+  function snapCannonsToDeck(walkableMeshes) {
+    if (!walkableMeshes?.length) return;
+    group.updateMatrixWorld(true);
+    const ray = new THREE.Raycaster();
+    const down = new THREE.Vector3(0, -1, 0).transformDirection(group.matrixWorld);
+    const origin = new THREE.Vector3();
+    for (const cannon of cannons) {
+      let deckY = null;
+      for (const x of [cannon.mount.position.x * 0.72, cannon.mount.position.x * 0.55, cannon.mount.position.x]) {
+        origin.set(x, d.deckY + d.length, cannon.mount.position.z);
+        group.localToWorld(origin);
+        ray.set(origin, down);
+        ray.far = d.length * 2;
+        const hit = ray.intersectObjects(walkableMeshes, false)[0];
+        if (!hit) continue;
+        deckY = group.worldToLocal(hit.point.clone()).y;
+        break;
+      }
+      cannon.disabled = deckY === null;
+      cannon.mount.visible = !cannon.disabled;
+      cannon.mount.traverse((object) => {
+        if (cannon.disabled) object.layers.disable(0);
+        else object.layers.enable(0);
+      });
+      if (!cannon.disabled) cannon.mount.position.y = deckY + 0.04;
+    }
+    group.updateMatrixWorld(true);
+  }
 
   const halfL = d.length * 0.42;
   const halfW = d.beam * 0.42;
+  let buoyancyReady = false;
   function rotY(lx, lz, a) {
     const s = Math.sin(a), c = Math.cos(a);
     return [lx * c + lz * s, -lx * s + lz * c];
   }
 
-  function applyBuoyancy(sampleWaveHeight) {
+  function applyBuoyancy(sampleWaveHeight, dt = 1 / 60) {
     const a = group.rotation.y;
     const px = group.position.x, pz = group.position.z;
     const [bx, bz] = rotY(0, halfL, a);
@@ -61,9 +210,20 @@ export function buildPlayerShip(dims) {
     const sternH = sampleWaveHeight(px + sx, pz + sz);
     const stbdH = sampleWaveHeight(px + rx, pz + rz);
     const portH = sampleWaveHeight(px + lx, pz + lz);
-    group.position.y = (bowH + sternH + stbdH + portH) / 4;
-    group.rotation.x = Math.atan2(sternH - bowH, halfL * 2) * 0.9;
-    group.rotation.z = Math.atan2(stbdH - portH, halfW * 2) * 0.9;
+    const targetY = (bowH + sternH + stbdH + portH) / 4;
+    const targetPitch = Math.atan2(sternH - bowH, halfL * 2) * 0.9;
+    const targetRoll = Math.atan2(stbdH - portH, halfW * 2) * 0.9;
+    if (!buoyancyReady) {
+      group.position.y = targetY;
+      group.rotation.x = targetPitch;
+      group.rotation.z = targetRoll;
+      buoyancyReady = true;
+      return;
+    }
+    const alpha = 1 - Math.exp(-BUOYANCY_RESPONSE * Math.max(0, dt));
+    group.position.y = THREE.MathUtils.lerp(group.position.y, targetY, alpha);
+    group.rotation.x = THREE.MathUtils.lerp(group.rotation.x, targetPitch, alpha);
+    group.rotation.z = THREE.MathUtils.lerp(group.rotation.z, targetRoll, alpha);
   }
 
   const _v = new THREE.Vector3();
@@ -88,6 +248,12 @@ export function buildPlayerShip(dims) {
   return {
     group,
     modelPivot: null, // set by game when the .glb attaches
+    walkableMeshes: [],
+    stairZones: [],
+    solidMeshes: cannonSolidMeshes,
+    cannonSolidMeshes,
+    cannons,
+    snapCannonsToDeck,
     applyBuoyancy,
     hullTest,
     hidePrimitives,
