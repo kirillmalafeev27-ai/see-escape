@@ -4,8 +4,12 @@ import * as THREE from "three";
 const INTERACT_RANGE = 6.5;
 const BOARD_COUNT = 14;
 const BUCKET_AMOUNT = 13;
-const FLOOD_PER_HOLE = 1.05;
+const FLOOD_PER_HOLE = 0.3;
+const BREACH_COOLDOWN = 2.6;
+const MAX_ACTIVE_BREACHES = 6;
 const DOOR_RESPONSE = 4.5;
+const HOLD_SURFACE_LIFT = 0.14;
+const HOLD_SURFACE_THICKNESS = 0.12;
 
 function mat(color, roughness = 0.85, metalness = 0, extra = {}) {
   return new THREE.MeshStandardMaterial({ color, roughness, metalness, ...extra });
@@ -53,6 +57,7 @@ export class DamageControlSystem {
     this.onMessage = onMessage || (() => {});
     this.dims = ship.dims;
     this.breaches = [];
+    this.breachCooldown = 0;
     this.planks = [];
     this.waterLevel = 0;
     this.doorProgress = 0;
@@ -66,8 +71,10 @@ export class DamageControlSystem {
     this.holdRoot.name = "DamageControlHold";
     this.ship.group.add(this.holdRoot);
 
+    this._findHoldAccess();
     this._buildHold();
     this._findExteriorDoor();
+    this._buildHoldAccessNavigation();
     this._buildDoorVisuals();
     this._scatterPlanks();
   }
@@ -77,48 +84,42 @@ export class DamageControlSystem {
     this.ship.walkableMeshes.push(mesh);
   }
 
-  _addSolid(mesh) {
-    this.holdRoot.add(mesh);
-    this.ship.solidMeshes.push(mesh);
+  _findHoldAccess() {
+    const ramp = this.ship.walkableMeshes.find((mesh) => /StairsBot.*_StairsRamp$/i.test(mesh.name || ""));
+    const low = ramp?.userData.lowLanding;
+    const high = ramp?.userData.highLanding;
+    this.holdAccess = {
+      low: low ? new THREE.Vector3(...low) : new THREE.Vector3(0, this.dims.keelY + 5.2, -this.dims.length * 0.3),
+      high: high ? new THREE.Vector3(...high) : new THREE.Vector3(0, this.dims.deckY, -this.dims.length * 0.2),
+    };
   }
 
   _buildHold() {
     const d = this.dims;
-    this.floorY = d.keelY + 3.4;
+    const descend = this.holdAccess.low.clone().sub(this.holdAccess.high).setY(0).normalize();
+    this.floorY = this.holdAccess.low.y;
     this.holdHeight = Math.max(5.8, Math.min(8.2, d.deckY - this.floorY - 1.2));
     this.holdWidth = d.beam * 0.64;
-    this.holdDepth = d.length * 0.54;
-    this.holdCenterZ = -d.length * 0.02;
+    this.holdDepth = d.length * 0.2;
+    this.holdCenterZ = this.holdAccess.low.z + descend.z * this.holdDepth * 0.48;
     this.minX = -this.holdWidth / 2;
     this.maxX = this.holdWidth / 2;
     this.minZ = this.holdCenterZ - this.holdDepth / 2;
     this.maxZ = this.holdCenterZ + this.holdDepth / 2;
 
-    const wood = mat(0x56321f, 0.93);
-    const darkWood = mat(0x382013, 0.96);
-    const floor = boxMesh(this.holdWidth, 0.28, this.holdDepth, wood, "HoldFloorVisual");
-    floor.position.set(0, this.floorY - 0.14, this.holdCenterZ);
-    this.holdRoot.add(floor);
-
-    const walkable = boxMesh(this.holdWidth - 0.4, 0.12, this.holdDepth - 0.4, invisibleMaterial(), "HoldFloor");
-    walkable.position.set(0, this.floorY - 0.06, this.holdCenterZ);
+    const walkable = boxMesh(
+      this.holdWidth - 0.4,
+      HOLD_SURFACE_THICKNESS,
+      this.holdDepth - 0.4,
+      invisibleMaterial(),
+      "HoldFloor"
+    );
+    walkable.position.set(
+      0,
+      this.floorY + HOLD_SURFACE_LIFT - HOLD_SURFACE_THICKNESS / 2,
+      this.holdCenterZ
+    );
     this._addWalkable(walkable);
-
-    const wallY = this.floorY + this.holdHeight / 2;
-    for (const x of [this.minX, this.maxX]) {
-      const wall = boxMesh(0.34, this.holdHeight, this.holdDepth, darkWood, "HoldSideWall");
-      wall.position.set(x, wallY, this.holdCenterZ);
-      this._addSolid(wall);
-    }
-    for (const z of [this.minZ, this.maxZ]) {
-      const wall = boxMesh(this.holdWidth, this.holdHeight, 0.34, darkWood, "HoldEndWall");
-      wall.position.set(0, wallY, z);
-      this._addSolid(wall);
-    }
-
-    const ceiling = boxMesh(this.holdWidth, 0.22, this.holdDepth, darkWood, "HoldCeiling");
-    ceiling.position.set(0, this.floorY + this.holdHeight + 0.11, this.holdCenterZ);
-    this.holdRoot.add(ceiling);
 
     this.water = boxMesh(
       this.holdWidth - 0.7,
@@ -131,8 +132,62 @@ export class DamageControlSystem {
     this.water.visible = false;
     this.holdRoot.add(this.water);
 
-    this.holdSpawn = new THREE.Vector3(0, this.floorY + 0.12, this.maxZ - 3.2);
-    this.interiorDoorPosition = new THREE.Vector3(0, this.floorY, this.maxZ - 0.7);
+  }
+
+  _addWalkableSurface({ width, depth, x = 0, y, z, name, stairTransition = false }) {
+    const surface = boxMesh(width, HOLD_SURFACE_THICKNESS, depth, invisibleMaterial(), name);
+    surface.position.set(x, y - HOLD_SURFACE_THICKNESS / 2, z);
+    this._addWalkable(surface);
+    if (stairTransition) {
+      this.ship.stairZones.push(
+        new THREE.Box3(
+          new THREE.Vector3(x - width / 2, y - 1.4, z - depth / 2),
+          new THREE.Vector3(x + width / 2, y + 3.8, z + depth / 2)
+        )
+      );
+    }
+    return surface;
+  }
+
+  _buildHoldAccessNavigation() {
+    const high = this.holdAccess.high;
+    const low = this.holdAccess.low;
+    const doorwayWidth = Math.min(this.holdWidth - 0.6, Math.max(6.2, this.exteriorDoorSize.x + 1.4));
+    const outerThresholdZ = this.exteriorDoorCenter.z - this.exteriorDoorNormal.z * 1.35;
+    const innerThresholdZ = high.z + this.exteriorDoorNormal.z * 0.9;
+
+    // Bridge the door sill and the obstructing decorative mesh behind it. The
+    // platform stays thin and invisible, like the grate overlays around masts.
+    this._addWalkableSurface({
+      width: doorwayWidth,
+      depth: Math.abs(innerThresholdZ - outerThresholdZ),
+      x: this.exteriorDoorCenter.x,
+      y: high.y,
+      z: (outerThresholdZ + innerThresholdZ) / 2,
+      name: "HoldDoorwayStairsThreshold",
+      stairTransition: true,
+    });
+
+    // Keep both ends of the native lower stair ramp connected to their floors.
+    // These pads are invisible and intentionally small so the real hatch stays open.
+    this._addWalkableSurface({
+      width: Math.min(5.2, this.holdWidth - 0.8),
+      depth: 2.4,
+      x: high.x,
+      y: high.y,
+      z: high.z,
+      name: "HoldUpperStairsLanding",
+      stairTransition: true,
+    });
+    this._addWalkableSurface({
+      width: Math.min(5.2, this.holdWidth - 0.8),
+      depth: 2.4,
+      x: low.x,
+      y: low.y,
+      z: low.z,
+      name: "HoldLowerStairsLanding",
+      stairTransition: true,
+    });
   }
 
   _findExteriorDoor() {
@@ -149,10 +204,12 @@ export class DamageControlSystem {
     candidates.sort((a, b) => Math.abs(a.center.y - this.dims.deckY) - Math.abs(b.center.y - this.dims.deckY));
     const chosen = candidates[0];
     if (chosen) {
-      const size = chosen.bounds.getSize(new THREE.Vector3());
-      const center = chosen.center;
+      const bounds = new THREE.Box3();
+      for (const candidate of candidates) bounds.union(candidate.bounds);
+      const size = bounds.getSize(new THREE.Vector3());
+      const center = bounds.getCenter(new THREE.Vector3());
       const towardCenter = center.z >= 0 ? -1 : 1;
-      this.exteriorDoorPosition = new THREE.Vector3(center.x, chosen.bounds.min.y + 0.12, center.z + towardCenter * 2.4);
+      this.exteriorDoorPosition = new THREE.Vector3(center.x, bounds.min.y + 0.12, center.z + towardCenter * 2.4);
       this.exteriorDoorCenter = center;
       this.exteriorDoorSize = new THREE.Vector3(
         Math.max(4.2, size.x),
@@ -169,33 +226,10 @@ export class DamageControlSystem {
   }
 
   _buildDoorVisuals() {
-    const dark = mat(0x120b08, 1);
-    this.exteriorPortal = boxMesh(
-      this.exteriorDoorSize.x,
-      this.exteriorDoorSize.y,
-      0.12,
-      dark,
-      "OpenHoldExteriorPortal"
-    );
-    this.exteriorPortal.position.copy(this.exteriorDoorCenter);
-    this.exteriorPortal.visible = false;
-    this.ship.group.add(this.exteriorPortal);
-
-    const doorWood = mat(0x69412b, 0.9);
-    this.interiorPortal = boxMesh(6.8, 6.3, 0.12, dark, "OpenHoldInteriorPortal");
-    this.interiorPortal.position.set(0, this.floorY + 3.15, this.maxZ - 0.5);
-    this.holdRoot.add(this.interiorPortal);
-
+    // The GLB already contains the visible cabin doors. Once they open, the
+    // physical stairway behind them is enough; extra black portal planes only
+    // cover the passage and make the floor look broken.
     this.interiorDoorPivots = [];
-    for (const side of [-1, 1]) {
-      const pivot = new THREE.Group();
-      pivot.position.set(side * 3.25, this.floorY + 3.15, this.maxZ - 0.62);
-      const panel = boxMesh(3.25, 6.3, 0.24, doorWood, "HoldInteriorDoor");
-      panel.position.x = -side * 1.62;
-      pivot.add(panel);
-      this.holdRoot.add(pivot);
-      this.interiorDoorPivots.push({ pivot, side });
-    }
   }
 
   _scatterPlanks() {
@@ -246,7 +280,7 @@ export class DamageControlSystem {
   _makeBreachVisual(side, position, exterior = false) {
     const root = new THREE.Group();
     root.position.copy(position);
-    if (side.axis === "x") root.rotation.y = Math.PI / 2;
+    if (side.axis === "x") root.rotation.y = side.sign * Math.PI / 2;
     if (side.axis === "z" && side.sign < 0) root.rotation.y = Math.PI;
     const hole = new THREE.Mesh(
       new THREE.CircleGeometry(exterior ? 1.55 : 1.35, 13),
@@ -267,11 +301,12 @@ export class DamageControlSystem {
   }
 
   addBreach(hit) {
-    if (this.breaches.filter((breach) => breach.active).length >= 10) return;
+    if (this.breachCooldown > 0) return false;
+    if (this.breaches.filter((breach) => breach.active).length >= MAX_ACTIVE_BREACHES) return false;
     const local = this.ship.group.worldToLocal(hit.point.clone());
-    const side = Math.abs(local.x / this.dims.beam) >= Math.abs(local.z / this.dims.length)
-      ? { axis: "x", sign: Math.sign(local.x) || 1 }
-      : { axis: "z", sign: Math.sign(local.z) || 1 };
+    // Interior leaks belong on the port or starboard hull planking. Mapping
+    // bow and stern box hits onto end planes creates floating perpendicular holes.
+    const side = { axis: "x", sign: Math.sign(local.x) || 1 };
     const inner = new THREE.Vector3();
     if (side.axis === "x") {
       inner.set(
@@ -297,6 +332,8 @@ export class DamageControlSystem {
     else outer.z = side.sign * this.dims.length * 0.48;
     const outerVisual = this._makeBreachVisual(side, outer, true);
     this.breaches.push({ active: true, side, inner, inward, innerVisual, outerVisual });
+    this.breachCooldown = BREACH_COOLDOWN;
+    return true;
   }
 
   _nearestActiveBreach(position) {
@@ -341,10 +378,6 @@ export class DamageControlSystem {
     return position.distanceTo(this.exteriorDoorPosition) <= INTERACT_RANGE + 1;
   }
 
-  _nearInteriorDoor(position) {
-    return position.distanceTo(this.interiorDoorPosition) <= INTERACT_RANGE;
-  }
-
   _canDumpBucket(position) {
     return (
       this.bucketFull &&
@@ -362,13 +395,10 @@ export class DamageControlSystem {
       const plank = this._nearestPlank(position);
       if (plank && !this.heldPlank) return "E - взять доску для ремонта";
       if (this.waterLevel >= 1 && !this.bucketFull) return "E - зачерпнуть воду ведром";
-      if (this._nearInteriorDoor(position)) {
-        return this.doorProgress >= 0.96 ? "E - выйти на палубу" : "E - открыть двери трюма";
-      }
       return "";
     }
     if (this._nearExteriorDoor(position)) {
-      return this.doorProgress >= 0.96 ? "E - войти в трюм" : "E - открыть двери в трюм";
+      return this.doorProgress >= 0.96 ? "Проход открыт - спускайся в трюм по лестнице" : "E - открыть двери в трюм";
     }
     return "";
   }
@@ -398,7 +428,7 @@ export class DamageControlSystem {
         this.heldPlank = null;
         const patch = new THREE.Group();
         patch.position.copy(breach.inner);
-        if (breach.side.axis === "x") patch.rotation.y = Math.PI / 2;
+        if (breach.side.axis === "x") patch.rotation.y = breach.side.sign * Math.PI / 2;
         const wood = mat(0xa16d42, 0.9);
         for (const y of [-0.72, 0, 0.72]) {
           const board = boxMesh(3.8, 0.45, 0.28, wood, "HullPatchBoard");
@@ -424,23 +454,10 @@ export class DamageControlSystem {
         return true;
       }
 
-      if (this._nearInteriorDoor(position)) {
-        if (this.doorProgress < 0.96) {
-          this.doorOpening = true;
-          this.onMessage("Двери трюма открываются.");
-        } else {
-          rig.position.copy(this.exteriorDoorPosition);
-          this.onMessage("Ты вышел на палубу.");
-        }
-        return true;
-      }
     } else if (this._nearExteriorDoor(position)) {
       if (this.doorProgress < 0.96) {
         this.doorOpening = true;
-        this.onMessage("Двери в трюм открываются.");
-      } else {
-        rig.position.copy(this.holdSpawn);
-        this.onMessage("Ты вошёл в трюм.");
+        this.onMessage("Двери в трюм открываются. Теперь спускайся ногами по лестнице.");
       }
       return true;
     }
@@ -448,12 +465,12 @@ export class DamageControlSystem {
   }
 
   update(dt) {
+    this.breachCooldown = Math.max(0, this.breachCooldown - dt);
     if (this.doorOpening && this.doorProgress < 1) {
       this.doorProgress = Math.min(1, this.doorProgress + dt * DOOR_RESPONSE);
     }
     const doorAngle = this.doorProgress * Math.PI * 0.48;
     for (const { pivot, side } of this.interiorDoorPivots) pivot.rotation.y = side * doorAngle;
-    this.exteriorPortal.visible = this.doorProgress > 0.4;
     for (const node of this.modelDoorNodes) node.visible = this.doorProgress < 0.55;
 
     const active = this.breaches.filter((breach) => breach.active);

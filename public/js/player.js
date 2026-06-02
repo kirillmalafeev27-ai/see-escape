@@ -50,7 +50,7 @@ const STAIR_SUPPORT_PROBES = [
   [0, -STAIR_PROBE_RADIUS],
 ];
 const STAIR_NODE = /(?:stairs|ladder)/i;
-const STAIR_THRESHOLD_NODE = /(?:wall|rail|fence|grid|grate)/i;
+const STAIR_THRESHOLD_NODE = /(?:body|wall|rail|fence|grid|grate)/i;
 const VIEW_BLOCKING_RAIL_NODE = /(?:fencing|wall|rail|fence|grid|grate)/i;
 const LOCAL_DOWN = new THREE.Vector3(0, -1, 0);
 const RAIL_PROBE_HEIGHTS = [EYE_HEIGHT - 1.1, EYE_HEIGHT - 0.25, EYE_HEIGHT + 0.4];
@@ -280,11 +280,12 @@ export class PlayerController {
       this._origin.set(position.x + dx, position.y + stepUp + 0.05, position.z + dz);
       const hits = this._castLocal(this._origin, LOCAL_DOWN, this.walkableMeshes, stepUp + stepDown + 0.1);
       if (!hits.length) return null;
-      this._hitPoint.copy(hits[0].point);
+      const hit = hits[0];
+      this._hitPoint.copy(hit.point);
       this.ship.group.worldToLocal(this._hitPoint);
       return {
         y: this._hitPoint.y,
-        onStairs: STAIR_NODE.test(hits[0].object.name || ""),
+        onStairs: STAIR_NODE.test(hit.object.name || ""),
       };
   }
 
@@ -301,14 +302,7 @@ export class PlayerController {
   }
 
   _stairTransitionZone(from, to, padding = 0.25) {
-    const dx = to.x - from.x;
-    const dz = to.z - from.z;
     return this.stairZones.find((box) => {
-      const xSize = box.max.x - box.min.x;
-      const zSize = box.max.z - box.min.z;
-      const along = xSize < zSize ? Math.abs(dx) : Math.abs(dz);
-      const across = xSize < zSize ? Math.abs(dz) : Math.abs(dx);
-      if (along < across * 1.25) return false;
       const inside = (position) =>
         position.x >= box.min.x - padding &&
         position.x <= box.max.x + padding &&
@@ -330,9 +324,14 @@ export class PlayerController {
     const center = this._groundHit(position, 0, 0, stepUp, stepDown);
     if (!center) return null;
     const inStairZone = this._inStairZone(position, 0.35);
+    if (inStairZone || center.onStairs) {
+      const deltaY = center.y - position.y;
+      if (!allowLargeStep && (deltaY > MAX_STAIR_STEP_UP || deltaY < -MAX_STAIR_STEP_DOWN)) return null;
+      return { y: center.y, onStairs: true };
+    }
 
     const tryProbes = (probes) => {
-      let onStairs = inStairZone || center.onStairs;
+      let onStairs = false;
       const samples = [center];
       for (const [dx, dz] of probes) {
         if (!dx && !dz) continue;
@@ -350,7 +349,7 @@ export class PlayerController {
       return { y: center.y, onStairs };
     };
 
-    const regular = tryProbes(inStairZone || center.onStairs ? STAIR_SUPPORT_PROBES : SUPPORT_PROBES);
+    const regular = tryProbes(SUPPORT_PROBES);
     if (regular) return regular;
     const stairFallback = tryProbes(STAIR_SUPPORT_PROBES);
     return stairFallback?.onStairs ? stairFallback : null;

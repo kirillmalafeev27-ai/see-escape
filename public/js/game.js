@@ -3,13 +3,13 @@
 // realistic cannonball fire, wood-debris impacts, and the HUD/main loop.
 import * as THREE from "three";
 import { createWorld } from "./ocean.js";
-import { EffectsSystem } from "./effects.js?v=20260602-damage-control-v2";
+import { EffectsSystem } from "./effects.js?v=20260602-native-hold-stairs-v5";
 import { ProjectileSystem } from "./ballistics.js";
 import { buildPlayerShip, SHIP_DEFAULTS } from "./ship.js?v=20260601-model-cannons";
 import { EnemyFleet } from "./enemy.js";
-import { PlayerController } from "./player.js?v=20260602-damage-control-v2";
-import { DamageControlSystem } from "./damage-control.js?v=20260602-damage-control-v2";
-import { loadAndAnalyzeShip } from "./models.js?v=20260602-damage-control-v2";
+import { PlayerController } from "./player.js?v=20260602-native-hold-stairs-v5";
+import { DamageControlSystem } from "./damage-control.js?v=20260602-native-hold-stairs-v5";
+import { loadAndAnalyzeShip } from "./models.js?v=20260602-native-hold-stairs-v5";
 
 export async function startGame(container, hud) {
   const world = createWorld(container);
@@ -129,9 +129,12 @@ export async function startGame(container, hud) {
   };
 
   function registerPlayerHit(hit) {
-    damageControl.addBreach(hit);
     flash();
-    setMessage("Пробоина в корпусе! Спускайся в трюм: возьми доску и заколоти течь.");
+    if (damageControl.addBreach(hit)) {
+      setMessage("Пробоина в корпусе! Спускайся в трюм: возьми доску и заколоти течь.");
+    } else {
+      setMessage("Ядро ударило в корпус, но новой течи не появилось.");
+    }
   }
 
   function loseToFlooding() {

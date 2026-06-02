@@ -29,7 +29,7 @@ const STAIRS_NODE = /(?:stairs|ladder)/i;
 const MAST_NODE = /(?:mast(?:back|front|mid)?)/i;
 // These parts still render, but should not become broad navigation blockers.
 // Decks, visible outer fencing, the hull, and explicit mast colliders remain solid.
-const NON_SOLID_NODE = /(?:sail|flag|wire|rope|cannon|bracing|support|wall|loophole|window|door)/i;
+const NON_SOLID_NODE = /(?:sail|flag|wire|rope|cannon|bracing|support|wall|loophole|window|door|barrel|box|pallet)/i;
 const CANNON_NODE = /^StylShip_Cannon\d+$/i;
 const CANNON_WHEEL_LATERAL_CENTER = 5.7;
 const CANNON_WHEEL_MAX_LENGTH = 12;
@@ -38,13 +38,15 @@ const MAST_GRATE_MARGIN = 4.1;
 const MAST_GRATE_MIN_SIZE = 9.2;
 const MAST_GRATE_FLOOR_THICKNESS = 0.12;
 const MAST_GRATE_SURFACE_LIFT = 0.14;
-const DECK_SURFACE_OVERLAP = 0.7;
-const DECK_SURFACE_LIFT = 0.12;
-const DECK_SURFACE_THICKNESS = 0.1;
 const STAIR_RAMP_THICKNESS = 0.16;
 const STAIR_RAMP_END_EXTENSION = 0.5;
 const STAIR_RAMP_TOP_EXTENSION = 1.25;
 const STAIR_RAMP_SURFACE_LIFT = 0.05;
+const DECK_SUPPORT_THICKNESS = 0.12;
+const DECK_SUPPORT_LIFT = 0.08;
+const DECK_SUPPORT_INSET = 0.48;
+const STAIR_OPENING_MARGIN = 0.32;
+const MIN_DECK_SUPPORT_SPAN = 0.45;
 
 function removeNonShipNodes(parent) {
   for (const child of [...parent.children]) {
@@ -104,32 +106,6 @@ function invisibleNavigationMaterial() {
     depthWrite: false,
     colorWrite: false,
   });
-}
-
-function buildDeckSurfaceNavigation(walkableMeshes) {
-  const navigationRoot = new THREE.Group();
-  navigationRoot.name = "PlayerNavigation";
-  const invisible = invisibleNavigationMaterial();
-  for (const deck of [...walkableMeshes]) {
-    if (STAIRS_NODE.test(deck.name || "")) continue;
-    const box = new THREE.Box3().setFromObject(deck);
-    const width = box.max.x - box.min.x;
-    const depth = box.max.z - box.min.z;
-    if (width < 1 || depth < 1) continue;
-    const floor = new THREE.Mesh(
-      new THREE.BoxGeometry(width + DECK_SURFACE_OVERLAP * 2, DECK_SURFACE_THICKNESS, depth + DECK_SURFACE_OVERLAP * 2),
-      invisible
-    );
-    floor.name = `${deck.name}_DeckSurface`;
-    floor.position.set(
-      (box.min.x + box.max.x) / 2,
-      box.max.y + DECK_SURFACE_LIFT - DECK_SURFACE_THICKNESS / 2,
-      (box.min.z + box.max.z) / 2
-    );
-    navigationRoot.add(floor);
-    walkableMeshes.push(floor);
-  }
-  return navigationRoot;
 }
 
 function buildMastNavigation(mastMeshes, walkableMeshes, navigationRoot) {
@@ -266,6 +242,8 @@ function buildStairNavigation(stairMeshes, walkableMeshes, navigationRoot) {
       (startZ + endZ) / 2
     );
     ramp.rotation.x = -angle;
+    ramp.userData.lowLanding = [x, startY + STAIR_RAMP_SURFACE_LIFT, startZ];
+    ramp.userData.highLanding = [x, endY + STAIR_RAMP_SURFACE_LIFT, endZ];
     navigationRoot.add(ramp);
     walkableMeshes.push(ramp);
     stairMeshes.push(ramp);
@@ -274,6 +252,133 @@ function buildStairNavigation(stairMeshes, walkableMeshes, navigationRoot) {
 
   navigationRoot.updateMatrixWorld(true);
   return ramps;
+}
+
+function subtractRect(rect, hole) {
+  const minX = Math.max(rect.minX, hole.minX);
+  const maxX = Math.min(rect.maxX, hole.maxX);
+  const minZ = Math.max(rect.minZ, hole.minZ);
+  const maxZ = Math.min(rect.maxZ, hole.maxZ);
+  if (minX >= maxX || minZ >= maxZ) return [rect];
+
+  return [
+    { minX: rect.minX, maxX: minX, minZ: rect.minZ, maxZ: rect.maxZ },
+    { minX: maxX, maxX: rect.maxX, minZ: rect.minZ, maxZ: rect.maxZ },
+    { minX, maxX, minZ: rect.minZ, maxZ: minZ },
+    { minX, maxX, minZ: maxZ, maxZ: rect.maxZ },
+  ].filter(
+    (part) =>
+      part.maxX - part.minX >= MIN_DECK_SUPPORT_SPAN &&
+      part.maxZ - part.minZ >= MIN_DECK_SUPPORT_SPAN
+  );
+}
+
+function buildDeckNavigation(walkableMeshes, stairMeshes, navigationRoot) {
+  const invisible = invisibleNavigationMaterial();
+  const floors = walkableMeshes.filter(
+    (mesh) => /(?:floor|deck)/i.test(mesh.name || "") && !STAIRS_NODE.test(mesh.name || "")
+  );
+  const stairs = stairMeshes.filter((mesh) => !/_StairsRamp$/i.test(mesh.name || ""));
+
+  for (const floor of floors) {
+    const box = new THREE.Box3().setFromObject(floor);
+    if (box.max.y - box.min.y > 1.8) continue;
+    const deckY = box.max.y + DECK_SUPPORT_LIFT;
+    let parts = [{
+      minX: box.min.x + DECK_SUPPORT_INSET,
+      maxX: box.max.x - DECK_SUPPORT_INSET,
+      minZ: box.min.z + DECK_SUPPORT_INSET,
+      maxZ: box.max.z - DECK_SUPPORT_INSET,
+    }];
+
+    for (const stair of stairs) {
+      const stairBox = new THREE.Box3().setFromObject(stair);
+      if (deckY < stairBox.min.y - 0.5 || deckY > stairBox.max.y + 0.5) continue;
+      const hole = {
+        minX: stairBox.min.x - STAIR_OPENING_MARGIN,
+        maxX: stairBox.max.x + STAIR_OPENING_MARGIN,
+        minZ: stairBox.min.z - STAIR_OPENING_MARGIN,
+        maxZ: stairBox.max.z + STAIR_OPENING_MARGIN,
+      };
+      parts = parts.flatMap((part) => subtractRect(part, hole));
+    }
+
+    for (const [index, part] of parts.entries()) {
+      const support = new THREE.Mesh(
+        new THREE.BoxGeometry(
+          part.maxX - part.minX,
+          DECK_SUPPORT_THICKNESS,
+          part.maxZ - part.minZ
+        ),
+        invisible
+      );
+      support.name = `${floor.name}_DeckSupport_${index}`;
+      support.position.set(
+        (part.minX + part.maxX) / 2,
+        deckY - DECK_SUPPORT_THICKNESS / 2,
+        (part.minZ + part.maxZ) / 2
+      );
+      navigationRoot.add(support);
+      walkableMeshes.push(support);
+    }
+  }
+  navigationRoot.updateMatrixWorld(true);
+}
+
+function collectNavigationSurfaces(navigationRoot) {
+  const surfaces = [];
+  navigationRoot.updateMatrixWorld(true);
+  navigationRoot.traverse((mesh) => {
+    if (!mesh.isMesh) return;
+    const box = new THREE.Box3().setFromObject(mesh);
+    if (/_StairsRamp$/i.test(mesh.name || "")) {
+      const low = mesh.userData.lowLanding;
+      const high = mesh.userData.highLanding;
+      if (!low || !high) return;
+      surfaces.push({
+        kind: "ramp",
+        name: mesh.name,
+        minX: box.min.x,
+        maxX: box.max.x,
+        minZ: Math.min(low[2], high[2]),
+        maxZ: Math.max(low[2], high[2]),
+        startZ: low[2],
+        endZ: high[2],
+        startY: low[1],
+        endY: high[1],
+        onStairs: true,
+      });
+      return;
+    }
+    if (!/(?:DeckSupport|GrateFloor)/i.test(mesh.name || "")) return;
+    surfaces.push({
+      kind: "flat",
+      name: mesh.name,
+      minX: box.min.x,
+      maxX: box.max.x,
+      minZ: box.min.z,
+      maxZ: box.max.z,
+      y: box.max.y,
+      onStairs: /GrateFloor$/i.test(mesh.name || ""),
+    });
+  });
+  return surfaces;
+}
+
+function collectNavigationBlockers(mastColliders) {
+  return mastColliders.map((mesh) => {
+    const box = new THREE.Box3().setFromObject(mesh);
+    return {
+      kind: "circle",
+      name: mesh.name,
+      x: (box.min.x + box.max.x) / 2,
+      z: (box.min.z + box.max.z) / 2,
+      radius: Math.max(box.max.x - box.min.x, box.max.z - box.min.z) / 2,
+      minY: box.min.y,
+      maxY: box.max.y,
+      active: true,
+    };
+  });
 }
 
 function stripCannonWheels(geometry) {
@@ -437,10 +542,14 @@ export async function loadAndAnalyzeShip(url, { targetLength, flip = false, draf
   const draft = draftFraction * deckRaw;
   pivot.position.y = -draft;
   pivot.updateMatrixWorld(true);
-  const navigationRoot = buildDeckSurfaceNavigation(walkableMeshes);
+  const navigationRoot = new THREE.Group();
+  navigationRoot.name = "PlayerNavigation";
   const { mastColliders } = buildMastNavigation(mastMeshes, walkableMeshes, navigationRoot);
   buildStairNavigation(stairMeshes, walkableMeshes, navigationRoot);
+  buildDeckNavigation(walkableMeshes, stairMeshes, navigationRoot);
   solidMeshes.push(...mastColliders);
+  const navigationSurfaces = collectNavigationSurfaces(navigationRoot);
+  const navigationBlockers = collectNavigationBlockers(mastColliders);
   const cannonTemplate = extractCannonTemplate(root);
   const stairZones = stairMeshes.map((mesh) => {
     const box = new THREE.Box3().setFromObject(mesh);
@@ -464,5 +573,15 @@ export async function loadAndAnalyzeShip(url, { targetLength, flip = false, draf
   });
 
   const dims = { length, beam, deckY: deckRaw - draft, keelY: -draft };
-  return { pivot, navigationRoot, dims, walkableMeshes, solidMeshes, stairZones, cannonTemplate };
+  return {
+    pivot,
+    navigationRoot,
+    dims,
+    walkableMeshes,
+    solidMeshes,
+    stairZones,
+    navigationSurfaces,
+    navigationBlockers,
+    cannonTemplate,
+  };
 }
