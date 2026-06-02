@@ -24,6 +24,20 @@ const STAIR_GROUND_RESPONSE = 26;
 const JUMP_SPEED = 16;
 const JUMP_GRAVITY = 32;
 const FELL_OFF_DEPTH = 24;
+// Probe ring (at body radius) used to bridge the small seams between adjacent
+// deck rectangles so the player never gets stranded in a gap.
+const RING_D = PLAYER_RADIUS * 0.7071;
+const PROBE_RING = [
+  [0, 0],
+  [PLAYER_RADIUS, 0],
+  [-PLAYER_RADIUS, 0],
+  [0, PLAYER_RADIUS],
+  [0, -PLAYER_RADIUS],
+  [RING_D, RING_D],
+  [RING_D, -RING_D],
+  [-RING_D, RING_D],
+  [-RING_D, -RING_D],
+];
 const MIN_CANNON_PITCH = THREE.MathUtils.degToRad(-8);
 const MAX_CANNON_PITCH = THREE.MathUtils.degToRad(38);
 const CANNON_INTERACTION_RANGE = 7.5;
@@ -89,6 +103,10 @@ export class PlayerController {
     this._bindInput();
     this._placeOnDeck();
     this._rememberSafe();
+    console.info(
+      `[nav] surfaces=${this.surfaces.length} blockers=${this.blockers.length} ` +
+      `spawn=(${this.rig.position.x.toFixed(1)}, ${this.rig.position.y.toFixed(1)}, ${this.rig.position.z.toFixed(1)})`
+    );
   }
 
   _bindInput() {
@@ -143,17 +161,29 @@ export class PlayerController {
     return surface.y;
   }
 
-  // Highest walkable surface at (x,z) whose top is at or below `ceilingY`.
-  // Returns { y, onStairs } or null. This is the whole ground model: standing,
-  // stepping up/down, ramps and stacked decks all fall out of "pick the highest
-  // surface I can reach from here".
-  _supportBelow(x, z, ceilingY) {
+  // Highest walkable surface whose footprint contains exactly (x,z) and whose
+  // top is at or below `ceilingY`. Returns { y, onStairs } or null.
+  _sampleSurface(x, z, ceilingY) {
     let best = null;
     for (const surface of this.surfaces) {
       if (x < surface.minX || x > surface.maxX || z < surface.minZ || z > surface.maxZ) continue;
       const y = this._surfaceY(surface, x, z);
       if (y > ceilingY) continue;
       if (!best || y > best.y) best = { y, onStairs: !!surface.onStairs };
+    }
+    return best;
+  }
+
+  // Tolerant ground lookup: the whole ground model. Standing, stepping up/down,
+  // ramps and stacked decks all fall out of "pick the highest surface I can
+  // reach from here". A probe ring at body radius bridges the seams between
+  // adjacent deck rectangles so small gaps never strand the player.
+  _groundAt(x, z, footY) {
+    const ceiling = footY + MAX_STEP_UP;
+    let best = null;
+    for (const [ox, oz] of PROBE_RING) {
+      const sample = this._sampleSurface(x + ox, z + oz, ceiling);
+      if (sample && (!best || sample.y > best.y)) best = sample;
     }
     return best;
   }
@@ -196,7 +226,7 @@ export class PlayerController {
     }
 
     if (this.surfaces.length) {
-      const ground = this._supportBelow(nx, nz, footY + MAX_STEP_UP);
+      const ground = this._groundAt(nx, nz, footY);
       // No surface, or a drop bigger than a step (deck edge / open hatch) — stay
       // put so the player can't walk off into the sea or fall through openings.
       if (!ground || footY - ground.y > MAX_STEP_DOWN) return false;
@@ -221,9 +251,8 @@ export class PlayerController {
       }
     }
     for (const [x, z] of candidates) {
-      if (this._blocked(x, z, Infinity)) continue;
-      const ground = this._supportBelow(x, z, Infinity);
-      if (ground) {
+      const ground = this._groundAt(x, z, Infinity);
+      if (ground && !this._blocked(x, z, ground.y)) {
         this.rig.position.set(x, ground.y, z);
         return;
       }
@@ -241,7 +270,7 @@ export class PlayerController {
       this.rig.position.y += this.verticalVelocity * dt;
       if (this.verticalVelocity <= 0) {
         const ground = this.surfaces.length
-          ? this._supportBelow(this.rig.position.x, this.rig.position.z, previousY + 0.1)
+          ? this._sampleSurface(this.rig.position.x, this.rig.position.z, previousY + 0.1)
           : { y: this.dims.deckY, onStairs: false };
         if (ground && this.rig.position.y <= ground.y) {
           this.rig.position.y = ground.y;
@@ -258,12 +287,16 @@ export class PlayerController {
       this.rig.position.y = this.dims.deckY;
       return;
     }
-    const ground = this._supportBelow(this.rig.position.x, this.rig.position.z, this.rig.position.y + MAX_STEP_UP);
+    const ground = this._groundAt(this.rig.position.x, this.rig.position.z, this.rig.position.y);
     if (ground) {
       const response = ground.onStairs ? STAIR_GROUND_RESPONSE : GROUND_RESPONSE;
       const alpha = 1 - Math.exp(-response * Math.max(0, dt));
       this.rig.position.y = THREE.MathUtils.lerp(this.rig.position.y, ground.y, alpha);
       this._rememberSafe();
+    } else {
+      // Lost the floor entirely (a gap the ring could not bridge) — never leave
+      // the player stranded; fall back to the last spot we knew was solid.
+      this.rig.position.copy(this._lastSafePosition);
     }
   }
 

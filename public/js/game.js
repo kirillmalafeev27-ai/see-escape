@@ -3,13 +3,13 @@
 // realistic cannonball fire, wood-debris impacts, and the HUD/main loop.
 import * as THREE from "three";
 import { createWorld } from "./ocean.js";
-import { EffectsSystem } from "./effects.js?v=20260602-analytic-nav";
+import { EffectsSystem } from "./effects.js?v=20260602-analytic-nav2";
 import { ProjectileSystem } from "./ballistics.js";
-import { buildPlayerShip, SHIP_DEFAULTS } from "./ship.js?v=20260602-analytic-nav";
+import { buildPlayerShip, SHIP_DEFAULTS } from "./ship.js?v=20260602-analytic-nav2";
 import { EnemyFleet } from "./enemy.js";
-import { PlayerController } from "./player.js?v=20260602-analytic-nav";
-import { DamageControlSystem } from "./damage-control.js?v=20260602-analytic-nav";
-import { loadAndAnalyzeShip } from "./models.js?v=20260602-analytic-nav";
+import { PlayerController } from "./player.js?v=20260602-analytic-nav2";
+import { DamageControlSystem } from "./damage-control.js?v=20260602-analytic-nav2";
+import { loadAndAnalyzeShip } from "./models.js?v=20260602-analytic-nav2";
 
 export async function startGame(container, hud) {
   const world = createWorld(container);
