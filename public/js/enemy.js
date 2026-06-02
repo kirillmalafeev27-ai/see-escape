@@ -165,7 +165,7 @@ export class EnemyFleet {
       }
 
       const inSails =
-        Math.abs(local.x) <= d.beam * 1.7 + radius &&
+        Math.abs(local.x) <= d.beam * 0.9 + radius &&
         Math.abs(local.z) <= d.length * 0.48 + radius &&
         local.y >= d.deckY + SAIL_BASE_CLEARANCE - radius &&
         local.y <= d.deckY + d.length * 0.9 + radius;
