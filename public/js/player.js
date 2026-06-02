@@ -1,8 +1,11 @@
-// player.js — first-person deck controller. The player rig is parented to the
-// ship so it heaves/rolls with it, and each frame it RAYCASTS straight down
-// onto the actual .glb deck mesh so you physically stand on the model (steps,
-// raised decks and all). A nearby deck cannon follows the mouse within its
-// traverse; the yellow arc starts at its muzzle and E fires that cannon.
+// player.js — first-person deck controller built on an ANALYTIC navigation
+// model (no per-frame raycasting). The ship exports a list of walkable
+// surfaces — flat deck rectangles and sloped stair ramps — plus a small set of
+// circular blockers for the mast trunks, all in ship-local space. The player
+// rig is parented to the ship so it heaves/rolls with it, and every frame we
+// just sample the surface height under the feet from plain math. This makes the
+// movement predictable: only the masts block you, small decorative meshes never
+// do, and steps/ramps are handled by simple height thresholds.
 import * as THREE from "three";
 import { predictTrajectory } from "./ballistics.js";
 
@@ -12,58 +15,18 @@ const LOOK_SENS = 0.0022;
 const RELOAD = 1.8;
 const EYE_HEIGHT = 4.2;
 const PLAYER_RADIUS = 0.85;
-const MAX_STEP_UP = 1.5;
-const MAX_STEP_DOWN = 2.6;
-const MAX_STAIR_STEP_UP = 3.4;
-const MAX_STAIR_STEP_DOWN = 4.2;
-const SUPPORT_HEIGHT_TOLERANCE = 1.1;
-const STAIR_SUPPORT_HEIGHT_TOLERANCE = 3.0;
+// Auto-step thresholds. Generous so small ledges, sills and crate-height meshes
+// never stop you; ramps carry you the rest of the way.
+const MAX_STEP_UP = 2.4;
+const MAX_STEP_DOWN = 3.8;
 const GROUND_RESPONSE = 18;
-const STAIR_GROUND_RESPONSE = 28;
+const STAIR_GROUND_RESPONSE = 26;
 const JUMP_SPEED = 16;
 const JUMP_GRAVITY = 32;
-const JUMP_LANDING_SCAN = 9;
-const JUMP_LANDING_SNAP = 0.45;
-const POSITION_CLEARANCE = PLAYER_RADIUS * 0.72;
-const LANDING_CLEARANCE = PLAYER_RADIUS * 0.55;
-const UNSTUCK_DELAY = 0.35;
-const RAIL_VIEW_DISTANCE = 2.8;
-const RAIL_EYE_LIFT = 2.6;
-const RAIL_EYE_RESPONSE = 10;
+const FELL_OFF_DEPTH = 24;
 const MIN_CANNON_PITCH = THREE.MathUtils.degToRad(-8);
 const MAX_CANNON_PITCH = THREE.MathUtils.degToRad(38);
 const CANNON_INTERACTION_RANGE = 7.5;
-const BODY_RAY_HEIGHTS = [0.8, 2.5];
-const SUPPORT_PROBES = [
-  [0, 0],
-  [PLAYER_RADIUS, 0],
-  [-PLAYER_RADIUS, 0],
-  [0, PLAYER_RADIUS],
-  [0, -PLAYER_RADIUS],
-];
-const STAIR_PROBE_RADIUS = 0.42;
-const STAIR_SUPPORT_PROBES = [
-  [0, 0],
-  [STAIR_PROBE_RADIUS, 0],
-  [-STAIR_PROBE_RADIUS, 0],
-  [0, STAIR_PROBE_RADIUS],
-  [0, -STAIR_PROBE_RADIUS],
-];
-const STAIR_NODE = /(?:stairs|ladder)/i;
-const STAIR_THRESHOLD_NODE = /(?:body|wall|rail|fence|grid|grate)/i;
-const VIEW_BLOCKING_RAIL_NODE = /(?:fencing|wall|rail|fence|grid|grate)/i;
-const LOCAL_DOWN = new THREE.Vector3(0, -1, 0);
-const RAIL_PROBE_HEIGHTS = [EYE_HEIGHT - 1.1, EYE_HEIGHT - 0.25, EYE_HEIGHT + 0.4];
-const CLEARANCE_DIRECTIONS = [
-  new THREE.Vector3(1, 0, 0),
-  new THREE.Vector3(-1, 0, 0),
-  new THREE.Vector3(0, 0, 1),
-  new THREE.Vector3(0, 0, -1),
-  new THREE.Vector3(1, 0, 1).normalize(),
-  new THREE.Vector3(-1, 0, 1).normalize(),
-  new THREE.Vector3(1, 0, -1).normalize(),
-  new THREE.Vector3(-1, 0, -1).normalize(),
-];
 
 function angleDelta(a, b) {
   return Math.atan2(Math.sin(a - b), Math.cos(a - b));
@@ -82,12 +45,10 @@ export class PlayerController {
     this.damageControl = damageControl || null;
     this.onMessage = onMessage || (() => {});
     this.dims = ship.dims;
-    this.walkableMeshes = ship.walkableMeshes || [];
-    this.stairZones = ship.stairZones || [];
-    this.solidMeshes = ship.solidMeshes || [];
-    this.viewBlockingRailMeshes = this.solidMeshes.filter((mesh) =>
-      VIEW_BLOCKING_RAIL_NODE.test(mesh.name || "")
-    );
+    // Live references — damage-control may push hold surfaces into these arrays
+    // after the model is analyzed; we read them by reference each frame.
+    this.surfaces = ship.navigationSurfaces || [];
+    this.blockers = ship.navigationBlockers || [];
     this.cannons = ship.cannons || [];
 
     this.rig = new THREE.Object3D();
@@ -103,23 +64,13 @@ export class PlayerController {
     this.locked = false;
     this.prompt = "";
 
-    this._ray = new THREE.Raycaster();
-    this._origin = new THREE.Vector3();
-    this._moveDirection = new THREE.Vector3();
-    this._rayDirection = new THREE.Vector3();
-    this._side = new THREE.Vector3();
-    this._candidate = new THREE.Vector3();
-    this._landingProbe = new THREE.Vector3();
-    this._lastSafePosition = new THREE.Vector3();
-    this._hitPoint = new THREE.Vector3();
     this._viewDirection = new THREE.Vector3();
     this._inverseShip = new THREE.Matrix4();
+    this._lastSafePosition = this.rig.position.clone();
     this.activeCannon = null;
     this.aimInTraverse = false;
     this.airborne = false;
     this.verticalVelocity = 0;
-    this._failedMoveTime = 0;
-    this._hasSafePosition = false;
 
     // Aim preview line + landing marker (world space).
     this.aimLine = new THREE.Line(
@@ -137,7 +88,7 @@ export class PlayerController {
 
     this._bindInput();
     this._placeOnDeck();
-    this._rememberSafePosition();
+    this._rememberSafe();
   }
 
   _bindInput() {
@@ -154,7 +105,7 @@ export class PlayerController {
     });
     addEventListener("keyup", (e) => (this.keys[e.code] = false));
 
-    this.dom.addEventListener("mousedown", (e) => {
+    this.dom.addEventListener("mousedown", () => {
       if (document.pointerLockElement !== this.dom) {
         this.dom.requestPointerLock();
       }
@@ -180,6 +131,143 @@ export class PlayerController {
       this.pitch = THREE.MathUtils.clamp(this.pitch, -1.3, 1.3);
     });
   }
+
+  // ---- analytic navigation -------------------------------------------------
+
+  _surfaceY(surface, x, z) {
+    if (surface.kind === "ramp") {
+      const span = surface.endZ - surface.startZ;
+      const t = Math.abs(span) < 1e-5 ? 0 : THREE.MathUtils.clamp((z - surface.startZ) / span, 0, 1);
+      return THREE.MathUtils.lerp(surface.startY, surface.endY, t);
+    }
+    return surface.y;
+  }
+
+  // Highest walkable surface at (x,z) whose top is at or below `ceilingY`.
+  // Returns { y, onStairs } or null. This is the whole ground model: standing,
+  // stepping up/down, ramps and stacked decks all fall out of "pick the highest
+  // surface I can reach from here".
+  _supportBelow(x, z, ceilingY) {
+    let best = null;
+    for (const surface of this.surfaces) {
+      if (x < surface.minX || x > surface.maxX || z < surface.minZ || z > surface.maxZ) continue;
+      const y = this._surfaceY(surface, x, z);
+      if (y > ceilingY) continue;
+      if (!best || y > best.y) best = { y, onStairs: !!surface.onStairs };
+    }
+    return best;
+  }
+
+  // Mast trunks are the only movement blockers. Everything else is decoration.
+  _blocked(x, z, footY) {
+    for (const blocker of this.blockers) {
+      if (blocker.active === false) continue;
+      if (footY < blocker.minY - 1 || footY > blocker.maxY) continue;
+      const dx = x - blocker.x;
+      const dz = z - blocker.z;
+      const reach = blocker.radius + PLAYER_RADIUS;
+      if (dx * dx + dz * dz < reach * reach) return true;
+    }
+    return false;
+  }
+
+  _rememberSafe() {
+    if (this.airborne) return;
+    this._lastSafePosition.copy(this.rig.position);
+  }
+
+  _recoverSafe() {
+    this.verticalVelocity = 0;
+    this.airborne = false;
+    this.rig.position.copy(this._lastSafePosition);
+  }
+
+  _tryMove(dx, dz) {
+    if (!dx && !dz) return false;
+    const footY = this.rig.position.y;
+    const nx = this.rig.position.x + dx;
+    const nz = this.rig.position.z + dz;
+    if (this._blocked(nx, nz, footY)) return false;
+
+    if (this.airborne) {
+      this.rig.position.x = nx;
+      this.rig.position.z = nz;
+      return true;
+    }
+
+    if (this.surfaces.length) {
+      const ground = this._supportBelow(nx, nz, footY + MAX_STEP_UP);
+      // No surface, or a drop bigger than a step (deck edge / open hatch) — stay
+      // put so the player can't walk off into the sea or fall through openings.
+      if (!ground || footY - ground.y > MAX_STEP_DOWN) return false;
+    }
+    this.rig.position.x = nx;
+    this.rig.position.z = nz;
+    return true;
+  }
+
+  _jump() {
+    if (this.airborne) return;
+    this.airborne = true;
+    this.verticalVelocity = JUMP_SPEED;
+  }
+
+  _placeOnDeck() {
+    if (!this.surfaces.length) return;
+    const candidates = [];
+    for (const z of [this.dims.length * 0.12, 0, -this.dims.length * 0.12, this.dims.length * 0.24]) {
+      for (const x of [0, -this.dims.beam * 0.14, this.dims.beam * 0.14]) {
+        candidates.push([x, z]);
+      }
+    }
+    for (const [x, z] of candidates) {
+      if (this._blocked(x, z, Infinity)) continue;
+      const ground = this._supportBelow(x, z, Infinity);
+      if (ground) {
+        this.rig.position.set(x, ground.y, z);
+        return;
+      }
+    }
+  }
+
+  // Keep the rig glued to the deck in ship-local space. Because the rig is a
+  // child of the ship, roll/pitch never turn this into a sideways slide.
+  _groundFollow(dt) {
+    this.rig.rotation.set(0, this.yaw, 0);
+
+    if (this.airborne) {
+      const previousY = this.rig.position.y;
+      this.verticalVelocity -= JUMP_GRAVITY * dt;
+      this.rig.position.y += this.verticalVelocity * dt;
+      if (this.verticalVelocity <= 0) {
+        const ground = this.surfaces.length
+          ? this._supportBelow(this.rig.position.x, this.rig.position.z, previousY + 0.1)
+          : { y: this.dims.deckY, onStairs: false };
+        if (ground && this.rig.position.y <= ground.y) {
+          this.rig.position.y = ground.y;
+          this.verticalVelocity = 0;
+          this.airborne = false;
+          this._rememberSafe();
+        }
+      }
+      if (this.rig.position.y < this.dims.keelY - FELL_OFF_DEPTH) this._recoverSafe();
+      return;
+    }
+
+    if (!this.surfaces.length) {
+      this.rig.position.y = this.dims.deckY;
+      return;
+    }
+    const ground = this._supportBelow(this.rig.position.x, this.rig.position.z, this.rig.position.y + MAX_STEP_UP);
+    if (ground) {
+      const response = ground.onStairs ? STAIR_GROUND_RESPONSE : GROUND_RESPONSE;
+      const alpha = 1 - Math.exp(-response * Math.max(0, dt));
+      this.rig.position.y = THREE.MathUtils.lerp(this.rig.position.y, ground.y, alpha);
+      this._rememberSafe();
+    }
+  }
+
+  // ---- cannons -------------------------------------------------------------
 
   _findNearbyCannon() {
     let best = null;
@@ -246,7 +334,7 @@ export class PlayerController {
     if (this.damageControl?.interact(this.rig, this.camera)) {
       this.verticalVelocity = 0;
       this.airborne = false;
-      this._rememberSafePosition();
+      this._rememberSafe();
       return;
     }
     this._fire();
@@ -266,304 +354,13 @@ export class PlayerController {
     this.marker.position.set(last.x, last.y + 0.5, last.z);
   }
 
-  _castLocal(origin, direction, objects, far) {
-    this.ship.group.updateWorldMatrix(true, false);
-    this._origin.copy(origin);
-    this.ship.group.localToWorld(this._origin);
-    this._rayDirection.copy(direction).transformDirection(this.ship.group.matrixWorld);
-    this._ray.set(this._origin, this._rayDirection);
-    this._ray.far = far;
-    return this._ray.intersectObjects(objects, false);
-  }
-
-  _groundHit(position, dx, dz, stepUp, stepDown) {
-      this._origin.set(position.x + dx, position.y + stepUp + 0.05, position.z + dz);
-      const hits = this._castLocal(this._origin, LOCAL_DOWN, this.walkableMeshes, stepUp + stepDown + 0.1);
-      if (!hits.length) return null;
-      const hit = hits[0];
-      this._hitPoint.copy(hit.point);
-      this.ship.group.worldToLocal(this._hitPoint);
-      return {
-        y: this._hitPoint.y,
-        onStairs: STAIR_NODE.test(hit.object.name || ""),
-      };
-  }
-
-  _inStairZone(position, padding = 0) {
-    return this.stairZones.some(
-      (box) =>
-        position.x >= box.min.x - padding &&
-        position.x <= box.max.x + padding &&
-        position.y >= box.min.y - padding &&
-        position.y <= box.max.y + padding &&
-        position.z >= box.min.z - padding &&
-        position.z <= box.max.z + padding
-    );
-  }
-
-  _stairTransitionZone(from, to, padding = 0.25) {
-    return this.stairZones.find((box) => {
-      const inside = (position) =>
-        position.x >= box.min.x - padding &&
-        position.x <= box.max.x + padding &&
-        position.y >= box.min.y - padding &&
-        position.y <= box.max.y + padding &&
-        position.z >= box.min.z - padding &&
-        position.z <= box.max.z + padding;
-      return inside(from) || inside(to);
-    });
-  }
-
-  _hasBlockingHit(hits, stairTransition = null) {
-    return hits.some(
-      (hit) => !stairTransition || !STAIR_THRESHOLD_NODE.test(hit.object.name || "")
-    );
-  }
-
-  _groundAt(position, stepUp = MAX_STAIR_STEP_UP, stepDown = MAX_STAIR_STEP_DOWN, allowLargeStep = false) {
-    const center = this._groundHit(position, 0, 0, stepUp, stepDown);
-    if (!center) return null;
-    const inStairZone = this._inStairZone(position, 0.35);
-    if (inStairZone || center.onStairs) {
-      const deltaY = center.y - position.y;
-      if (!allowLargeStep && (deltaY > MAX_STAIR_STEP_UP || deltaY < -MAX_STAIR_STEP_DOWN)) return null;
-      return { y: center.y, onStairs: true };
-    }
-
-    const tryProbes = (probes) => {
-      let onStairs = false;
-      const samples = [center];
-      for (const [dx, dz] of probes) {
-        if (!dx && !dz) continue;
-        const hit = this._groundHit(position, dx, dz, stepUp, stepDown);
-        if (!hit) return null;
-        samples.push(hit);
-        onStairs ||= hit.onStairs;
-      }
-      const tolerance = onStairs ? STAIR_SUPPORT_HEIGHT_TOLERANCE : SUPPORT_HEIGHT_TOLERANCE;
-      if (samples.some((sample) => Math.abs(sample.y - center.y) > tolerance)) return null;
-      const maxStepUp = onStairs ? MAX_STAIR_STEP_UP : MAX_STEP_UP;
-      const maxStepDown = onStairs ? MAX_STAIR_STEP_DOWN : MAX_STEP_DOWN;
-      const deltaY = center.y - position.y;
-      if (!allowLargeStep && (deltaY > maxStepUp || deltaY < -maxStepDown)) return null;
-      return { y: center.y, onStairs };
-    };
-
-    const regular = tryProbes(SUPPORT_PROBES);
-    if (regular) return regular;
-    const stairFallback = tryProbes(STAIR_SUPPORT_PROBES);
-    return stairFallback?.onStairs ? stairFallback : null;
-  }
-
-  _hasObstacle(from, to) {
-    if (!this.solidMeshes.length) return false;
-    const dx = to.x - from.x;
-    const dz = to.z - from.z;
-    const distance = Math.hypot(dx, dz);
-    if (distance < 1e-5) return false;
-    const stairTransition = this._stairTransitionZone(from, to);
-
-    this._moveDirection.set(dx / distance, 0, dz / distance);
-    this._side.set(-this._moveDirection.z, 0, this._moveDirection.x);
-    for (const lateral of [-PLAYER_RADIUS, 0, PLAYER_RADIUS]) {
-      for (const height of BODY_RAY_HEIGHTS) {
-        this._origin.set(
-          from.x + this._side.x * lateral,
-          from.y + height,
-          from.z + this._side.z * lateral
-        );
-        const hits = this._castLocal(this._origin, this._moveDirection, this.solidMeshes, distance + PLAYER_RADIUS);
-        if (this._hasBlockingHit(hits, stairTransition)) {
-          return true;
-        }
-      }
-    }
-    return false;
-  }
-
-  _isPositionClear(position, clearance = POSITION_CLEARANCE, stairTransition = null) {
-    if (!this.solidMeshes.length) return true;
-    for (const height of BODY_RAY_HEIGHTS) {
-      for (const direction of CLEARANCE_DIRECTIONS) {
-        this._origin.set(position.x, position.y + height, position.z);
-        const hits = this._castLocal(this._origin, direction, this.solidMeshes, clearance);
-        if (this._hasBlockingHit(hits, stairTransition)) return false;
-      }
-    }
-    return true;
-  }
-
-  _rememberSafePosition() {
-    if (this.airborne || this._inStairZone(this.rig.position, 0.25)) return;
-    if (this._isPositionClear(this.rig.position)) {
-      this._lastSafePosition.copy(this.rig.position);
-      this._hasSafePosition = true;
-    }
-  }
-
-  _recoverFromStuck() {
-    this.verticalVelocity = 0;
-    this.airborne = false;
-    this._failedMoveTime = 0;
-    if (this._hasSafePosition) this.rig.position.copy(this._lastSafePosition);
-    else this._placeOnDeck();
-  }
-
-  _isNearViewBlockingRail() {
-    if (!this.viewBlockingRailMeshes.length) return false;
-    for (const height of RAIL_PROBE_HEIGHTS) {
-      for (const direction of CLEARANCE_DIRECTIONS) {
-        this._origin.set(this.rig.position.x, this.rig.position.y + height, this.rig.position.z);
-        if (this._castLocal(this._origin, direction, this.viewBlockingRailMeshes, RAIL_VIEW_DISTANCE).length) {
-          return true;
-        }
-      }
-    }
-    return false;
-  }
-
-  _updateCameraHeight(dt) {
-    const target = EYE_HEIGHT + (this._isNearViewBlockingRail() ? RAIL_EYE_LIFT : 0);
-    const alpha = 1 - Math.exp(-RAIL_EYE_RESPONSE * Math.max(0, dt));
-    this.camera.position.y = THREE.MathUtils.lerp(this.camera.position.y, target, alpha);
-  }
-
-  _hasEscapeRoute() {
-    const distance = PLAYER_RADIUS * 1.35;
-    for (const direction of CLEARANCE_DIRECTIONS) {
-      this._candidate.set(
-        this.rig.position.x + direction.x * distance,
-        this.rig.position.y,
-        this.rig.position.z + direction.z * distance
-      );
-      const ground = this._groundAt(this._candidate);
-      if (!ground) continue;
-      this._candidate.y = ground.y;
-      const stairTransition = this._stairTransitionZone(this.rig.position, this._candidate);
-      if (
-        !this._hasObstacle(this.rig.position, this._candidate) &&
-        this._isPositionClear(this._candidate, LANDING_CLEARANCE, stairTransition)
-      ) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  _tryMove(dx, dz) {
-    if (!dx && !dz) return false;
-    this._candidate.set(this.rig.position.x + dx, this.rig.position.y, this.rig.position.z + dz);
-    const stairTransition = this._stairTransitionZone(this.rig.position, this._candidate);
-    if (this.airborne) {
-      if (this._hasObstacle(this.rig.position, this._candidate)) return false;
-      if (!this._isPositionClear(this._candidate, POSITION_CLEARANCE, stairTransition)) return false;
-      this.rig.position.x = this._candidate.x;
-      this.rig.position.z = this._candidate.z;
-      return true;
-    }
-    const ground = this._groundAt(this._candidate);
-    if (!ground) return false;
-    this._candidate.y = ground.y;
-    if (this._hasObstacle(this.rig.position, this._candidate)) return false;
-    if (!this._isPositionClear(this._candidate, POSITION_CLEARANCE, stairTransition)) return false;
-    this.rig.position.x = this._candidate.x;
-    this.rig.position.z = this._candidate.z;
-    return true;
-  }
-
-  _jump() {
-    if (this.airborne) return;
-    if (this.walkableMeshes.length) {
-      const ground = this._groundAt(this.rig.position, MAX_STAIR_STEP_UP, MAX_STAIR_STEP_DOWN, true);
-      if (!ground || Math.abs(this.rig.position.y - ground.y) > MAX_STAIR_STEP_DOWN) return;
-      this.rig.position.y = ground.y;
-    }
-    this.airborne = true;
-    this.verticalVelocity = JUMP_SPEED;
-  }
-
-  _placeOnDeck() {
-    if (!this.walkableMeshes.length) return;
-    this.ship.group.updateMatrixWorld(true);
-    for (const z of [this.dims.length * 0.12, 0, -this.dims.length * 0.12, this.dims.length * 0.24]) {
-      for (const x of [0, -this.dims.beam * 0.14, this.dims.beam * 0.14]) {
-        this._candidate.set(x, this.dims.deckY, z);
-        const ground = this._groundAt(this._candidate, 30, 60, true);
-        if (ground) {
-          this._candidate.y = ground.y;
-          if (!this._isPositionClear(this._candidate)) continue;
-          this.rig.position.copy(this._candidate);
-          this._rememberSafePosition();
-          return;
-        }
-      }
-    }
-  }
-
-  _landingGroundAt(previousY, currentY) {
-    const fallDistance = Math.max(0, previousY - currentY);
-    this._landingProbe.set(this.rig.position.x, previousY, this.rig.position.z);
-    const scan = Math.max(JUMP_LANDING_SCAN, fallDistance + JUMP_LANDING_SNAP);
-    const ground =
-      this._groundAt(this._landingProbe, JUMP_LANDING_SNAP, scan, true) ||
-      this._groundHit(this._landingProbe, 0, 0, JUMP_LANDING_SNAP, scan);
-    if (!ground) return null;
-    return ground.y <= previousY + JUMP_LANDING_SNAP && ground.y >= currentY - JUMP_LANDING_SNAP
-      ? ground
-      : null;
-  }
-
-  // Keep the rig on the deck in ship-local space so pitch and roll do not
-  // turn world-down into a sideways slide across the model.
-  _groundFollow(dt = 1 / 60) {
-    this.rig.rotation.set(0, this.yaw, 0);
-    if (this.airborne) {
-      const previousY = this.rig.position.y;
-      this.verticalVelocity -= JUMP_GRAVITY * dt;
-      this.rig.position.y += this.verticalVelocity * dt;
-
-      if (this.verticalVelocity <= 0) {
-        const ground = this.walkableMeshes.length
-          ? this._landingGroundAt(previousY, this.rig.position.y)
-          : { y: this.dims.deckY };
-        if (ground) {
-          this.rig.position.y = ground.y;
-          this.verticalVelocity = 0;
-          this.airborne = false;
-          if (this._isPositionClear(this.rig.position, LANDING_CLEARANCE)) {
-            this._rememberSafePosition();
-          } else {
-            this._recoverFromStuck();
-          }
-        }
-      }
-
-      if (this.rig.position.y < this.dims.keelY - JUMP_LANDING_SCAN) {
-        this.verticalVelocity = 0;
-        this.airborne = false;
-        this.rig.position.copy(this._lastSafePosition);
-      }
-      return;
-    }
-    if (!this.walkableMeshes.length) {
-      this.rig.position.y = this.dims.deckY;
-      return;
-    }
-    const ground = this._groundAt(this.rig.position);
-    if (ground) {
-      const response = ground.onStairs ? STAIR_GROUND_RESPONSE : GROUND_RESPONSE;
-      const alpha = 1 - Math.exp(-response * Math.max(0, dt));
-      this.rig.position.y = THREE.MathUtils.lerp(this.rig.position.y, ground.y, alpha);
-      this._rememberSafePosition();
-    }
-  }
+  // ---- per-frame -----------------------------------------------------------
 
   update(dt) {
     for (const cannon of this.cannons) {
       if (cannon.reload > 0) cannon.reload -= dt;
     }
 
-    // movement on the deck plane (ship-local x/z)
     const f = (this.keys["KeyW"] ? 1 : 0) - (this.keys["KeyS"] ? 1 : 0);
     const s = (this.keys["KeyD"] ? 1 : 0) - (this.keys["KeyA"] ? 1 : 0);
     if (f || s) {
@@ -571,30 +368,14 @@ export class PlayerController {
       const right = new THREE.Vector3(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
       const move = fwd.multiplyScalar(f).add(right.multiplyScalar(s));
       if (move.lengthSq() > 0) move.normalize().multiplyScalar(WALK_SPEED * dt);
-      if (this.walkableMeshes.length) {
-        let moved = this._tryMove(move.x, move.z);
-        if (!moved) {
-          moved = this._tryMove(move.x, 0) || this._tryMove(0, move.z);
-        }
-        if (moved) {
-          this._failedMoveTime = 0;
-        } else {
-          this._failedMoveTime += dt;
-          if (
-            this._failedMoveTime >= UNSTUCK_DELAY &&
-            (!this._isPositionClear(this.rig.position, LANDING_CLEARANCE) || !this._hasEscapeRoute())
-          ) {
-            this._recoverFromStuck();
-          }
-        }
-      } else {
-        this.rig.position.x += move.x;
-        this.rig.position.z += move.z;
+      // Full move first; if blocked, slide along each axis so we glide past
+      // mast trunks and deck edges instead of sticking.
+      if (!this._tryMove(move.x, move.z)) {
+        this._tryMove(move.x, 0) || this._tryMove(0, move.z);
       }
-    } else {
-      this._failedMoveTime = 0;
     }
-    if (!this.walkableMeshes.length) {
+
+    if (!this.surfaces.length) {
       const bx = this.dims.beam * 0.42;
       const bz = this.dims.length * 0.46;
       this.rig.position.x = THREE.MathUtils.clamp(this.rig.position.x, -bx, bx);
@@ -602,7 +383,7 @@ export class PlayerController {
     }
 
     this._groundFollow(dt);
-    this._updateCameraHeight(dt);
+    this.camera.position.y = EYE_HEIGHT;
     this.camera.rotation.set(this.pitch, 0, 0);
     this._updateAimPreview();
 

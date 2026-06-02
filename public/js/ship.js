@@ -250,6 +250,8 @@ export function buildPlayerShip(dims, { cannonTemplate = null } = {}) {
     modelPivot: null, // set by game when the .glb attaches
     walkableMeshes: [],
     stairZones: [],
+    navigationSurfaces: [], // analytic walkable rects/ramps (ship-local space)
+    navigationBlockers: [], // circular movement blockers (mast trunks)
     solidMeshes: cannonSolidMeshes,
     cannonSolidMeshes,
     cannons,

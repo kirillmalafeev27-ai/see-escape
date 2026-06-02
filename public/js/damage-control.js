@@ -84,6 +84,21 @@ export class DamageControlSystem {
     this.ship.walkableMeshes.push(mesh);
   }
 
+  // Register a flat walkable rectangle with the analytic navigation model the
+  // player controller walks on (ship-local space, top surface at `y`).
+  _addNavFlat({ width, depth, x = 0, z, y, onStairs = false, name }) {
+    this.ship.navigationSurfaces?.push({
+      kind: "flat",
+      name,
+      minX: x - width / 2,
+      maxX: x + width / 2,
+      minZ: z - depth / 2,
+      maxZ: z + depth / 2,
+      y,
+      onStairs,
+    });
+  }
+
   _findHoldAccess() {
     const ramp = this.ship.walkableMeshes.find((mesh) => /StairsBot.*_StairsRamp$/i.test(mesh.name || ""));
     const low = ramp?.userData.lowLanding;
@@ -120,6 +135,14 @@ export class DamageControlSystem {
       this.holdCenterZ
     );
     this._addWalkable(walkable);
+    this._addNavFlat({
+      width: this.holdWidth - 0.4,
+      depth: this.holdDepth - 0.4,
+      x: 0,
+      z: this.holdCenterZ,
+      y: this.floorY + HOLD_SURFACE_LIFT,
+      name: "HoldFloor",
+    });
 
     this.water = boxMesh(
       this.holdWidth - 0.7,
@@ -138,6 +161,7 @@ export class DamageControlSystem {
     const surface = boxMesh(width, HOLD_SURFACE_THICKNESS, depth, invisibleMaterial(), name);
     surface.position.set(x, y - HOLD_SURFACE_THICKNESS / 2, z);
     this._addWalkable(surface);
+    this._addNavFlat({ width, depth, x, z, y, onStairs: stairTransition, name });
     if (stairTransition) {
       this.ship.stairZones.push(
         new THREE.Box3(

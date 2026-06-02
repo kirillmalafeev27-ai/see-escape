@@ -3,13 +3,13 @@
 // realistic cannonball fire, wood-debris impacts, and the HUD/main loop.
 import * as THREE from "three";
 import { createWorld } from "./ocean.js";
-import { EffectsSystem } from "./effects.js?v=20260602-native-hold-stairs-v5";
+import { EffectsSystem } from "./effects.js?v=20260602-analytic-nav";
 import { ProjectileSystem } from "./ballistics.js";
-import { buildPlayerShip, SHIP_DEFAULTS } from "./ship.js?v=20260601-model-cannons";
+import { buildPlayerShip, SHIP_DEFAULTS } from "./ship.js?v=20260602-analytic-nav";
 import { EnemyFleet } from "./enemy.js";
-import { PlayerController } from "./player.js?v=20260602-native-hold-stairs-v5";
-import { DamageControlSystem } from "./damage-control.js?v=20260602-native-hold-stairs-v5";
-import { loadAndAnalyzeShip } from "./models.js?v=20260602-native-hold-stairs-v5";
+import { PlayerController } from "./player.js?v=20260602-analytic-nav";
+import { DamageControlSystem } from "./damage-control.js?v=20260602-analytic-nav";
+import { loadAndAnalyzeShip } from "./models.js?v=20260602-analytic-nav";
 
 export async function startGame(container, hud) {
   const world = createWorld(container);
@@ -22,6 +22,8 @@ export async function startGame(container, hud) {
   let playerWalkableMeshes = [];
   let playerSolidMeshes = [];
   let playerStairZones = [];
+  let playerNavigationSurfaces = [];
+  let playerNavigationBlockers = [];
   let playerCannonTemplate = null;
   try {
     const r = await loadAndAnalyzeShip("models/stylized_pirate_ship.glb", {
@@ -34,6 +36,8 @@ export async function startGame(container, hud) {
     playerWalkableMeshes = r.walkableMeshes;
     playerSolidMeshes = r.solidMeshes;
     playerStairZones = r.stairZones;
+    playerNavigationSurfaces = r.navigationSurfaces;
+    playerNavigationBlockers = r.navigationBlockers;
     playerCannonTemplate = r.cannonTemplate;
   } catch (e) {
     console.warn("Player ship model failed, using primitives:", e);
@@ -47,6 +51,8 @@ export async function startGame(container, hud) {
     ship.modelPivot = playerPivot;
     ship.walkableMeshes = playerWalkableMeshes;
     ship.stairZones = playerStairZones;
+    ship.navigationSurfaces = playerNavigationSurfaces;
+    ship.navigationBlockers = playerNavigationBlockers;
     ship.solidMeshes = [...playerSolidMeshes, ...ship.cannonSolidMeshes];
     ship.snapCannonsToDeck(playerWalkableMeshes);
     ship.hidePrimitives();
