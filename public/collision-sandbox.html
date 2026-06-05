@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Песочница коллизий корабля</title>
+    <style>
+      * { box-sizing: border-box; }
+      html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #07131d; color: #e9f7ff; font-family: "Segoe UI", system-ui, sans-serif; }
+      #viewport { position: fixed; inset: 0; }
+      canvas { display: block; }
+      button, input, textarea { font: inherit; }
+      button { border: 1px solid rgba(125, 214, 255, 0.38); border-radius: 7px; background: rgba(9, 43, 61, 0.94); color: #d9f4ff; padding: 7px 9px; cursor: pointer; }
+      button:hover { background: rgba(17, 79, 105, 0.98); }
+      button.active { border-color: #ffe27a; background: rgba(99, 71, 21, 0.94); color: #ffe27a; }
+      button.danger { border-color: rgba(255, 120, 120, 0.5); color: #ffb6b6; }
+      input, textarea { width: 100%; border: 1px solid rgba(125, 214, 255, 0.25); border-radius: 6px; background: rgba(2, 15, 23, 0.88); color: #e9f7ff; padding: 6px 7px; }
+      textarea { min-height: 150px; resize: vertical; font: 0.74rem Consolas, monospace; }
+      .panel { position: fixed; z-index: 10; border: 1px solid rgba(125, 214, 255, 0.24); border-radius: 11px; background: rgba(3, 19, 29, 0.9); box-shadow: 0 8px 30px rgba(0,0,0,0.35); backdrop-filter: blur(7px); }
+      #toolbar { top: 12px; left: 12px; width: 355px; padding: 12px; }
+      #toolbar h1 { margin: 0 0 5px; color: #9be3ff; font-size: 1.02rem; }
+      #toolbar p { margin: 0 0 9px; color: #a9c8d8; font-size: 0.74rem; line-height: 1.4; }
+      .button-row { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
+      .caption { margin-top: 10px; color: #7fd8ff; font-size: 0.7rem; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase; }
+      #status { margin-top: 9px; color: #bfeaff; font: 0.75rem Consolas, monospace; white-space: pre-wrap; }
+      #objects { top: 12px; right: 12px; width: min(600px, 45vw); max-height: 51vh; overflow: auto; padding: 10px; }
+      #objects h2, #inspector h2, #exporter h2 { margin: 0 0 8px; color: #9be3ff; font-size: 0.88rem; }
+      table { width: 100%; border-collapse: collapse; font: 0.69rem Consolas, monospace; }
+      th, td { padding: 5px 4px; border-bottom: 1px solid rgba(125, 214, 255, 0.13); text-align: left; white-space: nowrap; }
+      tr { cursor: pointer; }
+      tr:hover, tr.selected { background: rgba(63, 151, 190, 0.18); }
+      th { position: sticky; top: 0; background: rgba(3, 19, 29, 0.98); color: #7fd8ff; }
+      #inspector { left: 12px; bottom: 12px; width: 355px; padding: 11px; }
+      #fields { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+      label { color: #9fc4d4; font-size: 0.67rem; }
+      label span { display: block; margin-bottom: 3px; }
+      #exporter { right: 12px; bottom: 12px; width: min(600px, 45vw); padding: 10px; }
+      #json { max-height: 190px; }
+      #mode-hint { position: fixed; left: 50%; top: 14px; z-index: 8; transform: translateX(-50%); border-radius: 999px; background: rgba(3, 19, 29, 0.76); padding: 8px 13px; color: #ffe27a; font-size: 0.78rem; pointer-events: none; }
+      #crosshair { position: fixed; left: 50%; top: 50%; z-index: 9; width: 20px; height: 20px; transform: translate(-50%, -50%); display: none; pointer-events: none; }
+      #crosshair::before, #crosshair::after { content: ""; position: absolute; background: #ffe27a; box-shadow: 0 0 3px #000; }
+      #crosshair::before { left: 9px; top: 0; width: 2px; height: 20px; }
+      #crosshair::after { left: 0; top: 9px; width: 20px; height: 2px; }
+      #back { position: fixed; left: 50%; bottom: 14px; z-index: 12; transform: translateX(-50%); color: #d9f4ff; text-decoration: none; padding: 8px 13px; border-radius: 8px; background: rgba(3, 19, 29, 0.82); border: 1px solid rgba(125, 214, 255, 0.24); }
+      .collision-label { color: #eaf8ff; background: rgba(2, 15, 23, 0.82); border: 1px solid rgba(125, 214, 255, 0.34); border-radius: 5px; padding: 3px 5px; font: 0.64rem Consolas, monospace; white-space: nowrap; pointer-events: none; }
+      .muted { color: #8caebe; }
+    </style>
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+          "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <div id="viewport"></div>
+    <div id="crosshair"></div>
+    <div id="mode-hint"></div>
+
+    <section id="toolbar" class="panel">
+      <h1>Песочница коллизий корабля</h1>
+      <p>Здесь отображаются реальные игровые коллизии корабля без визуальной GLB-модели. Выберите исходный меш в таблице, чтобы выключить его или сделать редактируемую копию. Правки вступят в бой после кнопки «Применить коллизии».</p>
+      <div class="caption">Режим</div>
+      <div class="button-row">
+        <button data-mode="edit" class="active">Редактирование</button>
+        <button data-mode="walk">Ходьба</button>
+        <button data-mode="fly">Полёт бога</button>
+      </div>
+      <div class="caption">Добавить у текущей точки</div>
+      <div class="button-row">
+        <button data-add="floor">+ Пол</button>
+        <button data-add="ramp">+ Наклонная плоскость</button>
+        <button data-add="hole">+ Отверстие</button>
+        <button data-add="wall">+ Стена</button>
+        <button data-add="pillar">+ Колонна</button>
+      </div>
+      <div class="caption">Манипулятор выбранного объекта</div>
+      <div class="button-row">
+        <button data-transform="translate" class="active">Перемещать</button>
+        <button data-transform="scale">Масштабировать</button>
+        <button data-transform="rotate">Поворачивать</button>
+        <button id="duplicate">Дублировать / сделать копию</button>
+        <button id="remove" class="danger">Удалить / выключить</button>
+      </div>
+      <div id="status"></div>
+    </section>
+
+    <section id="objects" class="panel">
+      <h2>Таблица коллизий и расчётных чисел</h2>
+      <table>
+        <thead><tr><th>ID</th><th>Тип</th><th>Позиция</th><th>Размер / уклон</th><th>Статус</th></tr></thead>
+        <tbody id="object-rows"></tbody>
+      </table>
+    </section>
+
+    <section id="inspector" class="panel">
+      <h2>Точный инспектор выбранного объекта</h2>
+      <div id="fields" class="muted">Выберите объект в таблице или кликните по нему в режиме редактирования.</div>
+    </section>
+
+    <section id="exporter" class="panel">
+      <h2>JSON для передачи Codex</h2>
+      <textarea id="json" spellcheck="false"></textarea>
+      <div class="button-row">
+        <button id="copy-json">Скопировать JSON</button>
+        <button id="import-json">Загрузить JSON в редактор</button>
+        <button id="apply-profile">Применить коллизии</button>
+        <button id="save-local">Сохранить черновик</button>
+        <button id="reset">Отменить несохранённые</button>
+        <button id="default-profile" class="danger">Дефолт</button>
+      </div>
+    </section>
+
+    <a id="back" href="/simulation.html">← Вернуться в бой</a>
+
+    <script type="module" src="./js/collision-sandbox.js?v=20260603-cannon-line-v6"></script>
+  </body>
+</html>
