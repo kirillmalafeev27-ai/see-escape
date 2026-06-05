@@ -4,7 +4,7 @@
 // seabed. Visuals come from the .glb model when available (sized to the
 // measured dimensions), with a primitive hull as fallback.
 import * as THREE from "three";
-import { solveLaunchVelocity } from "./ballistics.js";
+import { solveLaunchVelocity } from "./ballistics.js?v=20260603-bonuses-island-v1";
 
 const ENEMY_DEFAULTS = { length: 72, beam: 18, deckY: 9, keelY: -9 };
 const MUZZLE_SPEED = 205;
@@ -61,10 +61,12 @@ export class EnemyFleet {
     this.getPlayerTarget = getPlayerTarget;
     this.dims = { ...ENEMY_DEFAULTS, ...(opts.dims || {}) };
     this.factory = opts.factory || null;
+    this.onSunk = opts.onSunk || (() => {});
     this.list = [];
     this.maxAlive = 3;
     this.spawnTimer = 2;
     this.killCount = 0;
+    this.quizMode = false;
     this._tmp = new THREE.Vector3();
   }
 
@@ -83,6 +85,7 @@ export class EnemyFleet {
       group: built.group,
       muzzles: built.muzzles,
       reload: 3 + Math.random() * 3,
+      health: 100,
       sinking: false,
       sinkVel: 0,
       list: 0,
@@ -183,6 +186,17 @@ export class EnemyFleet {
     e.sinkVel = 2;
     e.list = (Math.random() - 0.5) * 0.5;
     this.killCount++;
+    this.onSunk(e.group.position.clone());
+  }
+
+  damage(e, amount) {
+    if (!e || e.sinking) return false;
+    e.health = Math.max(0, (e.health ?? 100) - amount);
+    if (e.health <= 0) {
+      this.sink(e);
+      return true;
+    }
+    return false;
   }
 
   update(dt, onKilled) {
@@ -219,15 +233,16 @@ export class EnemyFleet {
       while (dy < -Math.PI) dy += Math.PI * 2;
       e.group.rotation.y += THREE.MathUtils.clamp(dy, -0.4 * dt, 0.4 * dt);
       const fwd = new THREE.Vector3(Math.sin(e.group.rotation.y), 0, Math.cos(e.group.rotation.y));
-      const speed = dist > STANDOFF ? 26 : -4;
+      const speed = this.quizMode ? (dist > STANDOFF ? 10 : 0) : dist > STANDOFF ? 26 : -4;
       e.group.position.addScaledVector(fwd, speed * dt);
 
       this._buoyancy(e, dt);
 
       e.reload -= dt;
-      if (e.reload <= 0 && dist < 760) {
+      const fireRange = this.quizMode ? 900 : 760;
+      if (e.reload <= 0 && dist < fireRange) {
         this._fire(e);
-        e.reload = 4 + Math.random() * 4;
+        e.reload = this.quizMode ? 12 + Math.random() * 6 : 4 + Math.random() * 4;
       }
     }
   }

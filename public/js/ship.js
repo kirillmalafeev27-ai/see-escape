@@ -8,6 +8,9 @@ import * as THREE from "three";
 export const SHIP_DEFAULTS = { length: 96, beam: 28, deckY: 12, keelY: -10 };
 const BULWARK = 5;
 const BUOYANCY_RESPONSE = 4.5;
+const BROADSIDE_Z_SHIFT = 0.0;
+const BROADSIDE_X_OUTBOARD = 3.35;
+const BROADSIDE_DECK_Y_OFFSET = -0.42;
 
 function mat(color, rough = 0.85, metal = 0.0) {
   return new THREE.MeshStandardMaterial({ color, roughness: rough, metalness: metal });
@@ -57,7 +60,7 @@ function buildCannons(group, d, cannonTemplate = null) {
     });
   }
 
-  function addCannon({ x, z, baseYaw, traverse, name }) {
+  function addCannon({ x, z, baseYaw, traverse, name, deckYOffset = 0.04, outboardOffset = 0 }) {
     const cannon = new THREE.Group();
     cannon.name = name;
     cannon.position.set(x, d.deckY, z);
@@ -108,6 +111,8 @@ function buildCannons(group, d, cannonTemplate = null) {
       muzzle,
       baseYaw,
       traverse,
+      deckYOffset,
+      outboardOffset,
       reload: 0,
       disabled: false,
     });
@@ -116,12 +121,14 @@ function buildCannons(group, d, cannonTemplate = null) {
   const cannonTraverse = THREE.MathUtils.degToRad(90);
   for (const side of [-1, 1]) {
     const baseYaw = side * Math.PI / 2;
-    for (const z of [-0.38, -0.23, -0.08, 0.06, 0.18, 0.27].map((fraction) => fraction * d.length)) {
+    for (const z of [-0.38, -0.23, -0.08, 0.06, 0.18, 0.27].map((fraction) => (fraction + BROADSIDE_Z_SHIFT) * d.length)) {
       addCannon({
         x: side * d.beam * 0.43,
         z,
         baseYaw,
         traverse: cannonTraverse,
+        deckYOffset: BROADSIDE_DECK_Y_OFFSET,
+        outboardOffset: BROADSIDE_X_OUTBOARD,
         name: side < 0 ? "Port broadside cannon" : "Starboard broadside cannon",
       });
     }
@@ -170,7 +177,17 @@ export function buildPlayerShip(dims, { cannonTemplate = null } = {}) {
     const origin = new THREE.Vector3();
     for (const cannon of cannons) {
       let deckY = null;
-      for (const x of [cannon.mount.position.x * 0.72, cannon.mount.position.x * 0.55, cannon.mount.position.x]) {
+      let deckX = cannon.mount.position.x;
+      const side = Math.sign(cannon.mount.position.x) || 1;
+      for (const x of [
+        cannon.mount.position.x,
+        cannon.mount.position.x * 0.96,
+        cannon.mount.position.x * 0.9,
+        cannon.mount.position.x * 0.82,
+        cannon.mount.position.x * 0.74,
+        cannon.mount.position.x * 0.66,
+        cannon.mount.position.x * 0.58,
+      ]) {
         origin.set(x, d.deckY + d.length, cannon.mount.position.z);
         group.localToWorld(origin);
         ray.set(origin, down);
@@ -178,6 +195,7 @@ export function buildPlayerShip(dims, { cannonTemplate = null } = {}) {
         const hit = ray.intersectObjects(walkableMeshes, false)[0];
         if (!hit) continue;
         deckY = group.worldToLocal(hit.point.clone()).y;
+        deckX = x;
         break;
       }
       cannon.disabled = deckY === null;
@@ -186,7 +204,10 @@ export function buildPlayerShip(dims, { cannonTemplate = null } = {}) {
         if (cannon.disabled) object.layers.disable(0);
         else object.layers.enable(0);
       });
-      if (!cannon.disabled) cannon.mount.position.y = deckY + 0.04;
+      if (!cannon.disabled) {
+        cannon.mount.position.x = deckX + side * cannon.outboardOffset;
+        cannon.mount.position.y = deckY + cannon.deckYOffset;
+      }
     }
     group.updateMatrixWorld(true);
   }

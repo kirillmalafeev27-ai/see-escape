@@ -1,12 +1,14 @@
 // player.js — first-person deck controller. The player rig is parented to the
-// ship so it heaves/rolls with it, and each frame it RAYCASTS straight down
+// ship so it heaves/rolls with it, and each frame it raycasts straight down
 // onto the actual .glb deck mesh so you physically stand on the model (steps,
 // raised decks and all). A nearby deck cannon follows the mouse within its
-// traverse; the yellow arc starts at its muzzle and E fires that cannon.
+// traverse; the yellow arc starts at its muzzle and LMB fires that cannon.
 import * as THREE from "three";
-import { predictTrajectory } from "./ballistics.js";
+import { predictTrajectory } from "./ballistics.js?v=20260603-bonuses-island-v1";
+import { pointInsideCollisionHole } from "./collision-profile.js?v=20260602-default-profile-v2";
 
 const PLAYER_MUZZLE_SPEED = 220;
+const GRAPESHOT_MUZZLE_SPEED = 155;
 const WALK_SPEED = 14;
 const LOOK_SENS = 0.0022;
 const RELOAD = 1.8;
@@ -70,7 +72,7 @@ function angleDelta(a, b) {
 }
 
 export class PlayerController {
-  constructor({ scene, camera, ship, domElement, projectiles, effects, getEnv, fireButton, jumpButton, damageControl, onMessage }) {
+  constructor({ scene, camera, ship, domElement, projectiles, effects, getEnv, fireButton, dumpButton, jumpButton, takePlankButton, scoopWaterButton, patchBreachButton, islandTeleportButton, damageControl, sailing, islandQuest, onMessage }) {
     this.camera = camera;
     this.ship = ship;
     this.dom = domElement;
@@ -78,8 +80,15 @@ export class PlayerController {
     this.effects = effects;
     this.getEnv = getEnv;
     this.fireButton = fireButton;
+    this.dumpButton = dumpButton;
     this.jumpButton = jumpButton;
+    this.takePlankButton = takePlankButton;
+    this.scoopWaterButton = scoopWaterButton;
+    this.patchBreachButton = patchBreachButton;
+    this.islandTeleportButton = islandTeleportButton;
     this.damageControl = damageControl || null;
+    this.sailing = sailing || null;
+    this.islandQuest = islandQuest || null;
     this.onMessage = onMessage || (() => {});
     this.dims = ship.dims;
     this.walkableMeshes = ship.walkableMeshes || [];
@@ -101,7 +110,13 @@ export class PlayerController {
     this.pitch = -0.05;
     this.keys = {};
     this.locked = false;
+    this.dragLook = false;
     this.prompt = "";
+    this.questMode = false;
+    this.walkMultiplier = 1;
+    this.grapeshotUnlocked = false;
+    this.cannonMode = "round";
+    this.handCannonCharges = 0;
 
     this._ray = new THREE.Raycaster();
     this._origin = new THREE.Vector3();
@@ -134,6 +149,8 @@ export class PlayerController {
     );
     this.marker.rotation.x = -Math.PI / 2;
     scene.add(this.marker);
+    this.handCannon = this._buildHandCannon();
+    camera.add(this.handCannon);
 
     this._bindInput();
     this._placeOnDeck();
@@ -144,25 +161,64 @@ export class PlayerController {
     addEventListener("keydown", (e) => {
       this.keys[e.code] = true;
       if (e.code === "KeyE" && !e.repeat) {
-        this._interactOrFire();
+        this._interact();
         e.preventDefault();
       }
       if (e.code === "Space" && !e.repeat) {
         this._jump();
         e.preventDefault();
       }
+      if (e.code === "KeyG" && !e.repeat && this.grapeshotUnlocked) {
+        this.cannonMode = this.cannonMode === "grapeshot" ? "round" : "grapeshot";
+        this.onMessage(this.cannonMode === "grapeshot" ? "Режим пушек: картечь." : "Режим пушек: ядро.");
+      }
     });
     addEventListener("keyup", (e) => (this.keys[e.code] = false));
 
     this.dom.addEventListener("mousedown", (e) => {
+      if (this.questMode || this.islandQuest?.active) {
+        if (document.pointerLockElement === this.dom) document.exitPointerLock?.();
+        this.dragLook = e.button === 0;
+        return;
+      }
       if (document.pointerLockElement !== this.dom) {
         this.dom.requestPointerLock();
+      } else if (e.button === 0) {
+        this._fire();
       }
+    });
+    addEventListener("mouseup", () => {
+      this.dragLook = false;
     });
     this.fireButton?.addEventListener("pointerdown", (e) => e.stopPropagation());
     this.fireButton?.addEventListener("click", (e) => {
       e.stopPropagation();
       this._fire();
+    });
+    this.dumpButton?.addEventListener("pointerdown", (e) => e.stopPropagation());
+    this.dumpButton?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this._dumpBucket();
+    });
+    this.takePlankButton?.addEventListener("pointerdown", (e) => e.stopPropagation());
+    this.takePlankButton?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this._takePlank();
+    });
+    this.scoopWaterButton?.addEventListener("pointerdown", (e) => e.stopPropagation());
+    this.scoopWaterButton?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this._scoopWater();
+    });
+    this.patchBreachButton?.addEventListener("pointerdown", (e) => e.stopPropagation());
+    this.patchBreachButton?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this._patchBreach();
+    });
+    this.islandTeleportButton?.addEventListener("pointerdown", (e) => e.stopPropagation());
+    this.islandTeleportButton?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this.islandQuest?.forceStart();
     });
     this.jumpButton?.addEventListener("pointerdown", (e) => e.stopPropagation());
     this.jumpButton?.addEventListener("click", (e) => {
@@ -174,7 +230,8 @@ export class PlayerController {
       this.locked = document.pointerLockElement === this.dom;
     });
     addEventListener("mousemove", (e) => {
-      if (!this.locked) return;
+      const freeIslandLook = (this.dragLook || Boolean(e.buttons & 1)) && (this.questMode || this.islandQuest?.active);
+      if (!this.locked && !freeIslandLook) return;
       this.yaw -= e.movementX * LOOK_SENS;
       this.pitch -= e.movementY * LOOK_SENS;
       this.pitch = THREE.MathUtils.clamp(this.pitch, -1.3, 1.3);
@@ -196,6 +253,95 @@ export class PlayerController {
       }
     }
     return best;
+  }
+
+  _buildHandCannon() {
+    const group = new THREE.Group();
+    group.name = "HandCannonBonus";
+    const metal = new THREE.MeshStandardMaterial({ color: 0x27343a, roughness: 0.42, metalness: 0.62 });
+    const wood = new THREE.MeshStandardMaterial({ color: 0x6b351f, roughness: 0.86 });
+    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.28, 1.45, 12), metal);
+    barrel.rotation.x = Math.PI / 2;
+    barrel.position.set(0.72, -0.72, -1.25);
+    group.add(barrel);
+    const stock = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.35, 0.72), wood);
+    stock.position.set(0.72, -0.92, -0.72);
+    group.add(stock);
+    group.rotation.set(-0.08, 0.18, -0.08);
+    group.visible = false;
+    return group;
+  }
+
+  addWalkMultiplier(amount = 0.25) {
+    this.walkMultiplier *= 1 + amount;
+  }
+
+  unlockGrapeshot() {
+    this.grapeshotUnlocked = true;
+    this.cannonMode = "grapeshot";
+  }
+
+  addHandCannonCharges(count = 3) {
+    this.handCannonCharges += count;
+    if (this.handCannon) this.handCannon.visible = this.handCannonCharges > 0;
+  }
+
+  captureWorldPose() {
+    this.ship.group.updateMatrixWorld(true);
+    this.rig.updateWorldMatrix(true, false);
+    return {
+      position: this.rig.getWorldPosition(new THREE.Vector3()),
+      yaw: this.yaw + this.ship.group.rotation.y,
+      pitch: this.pitch,
+    };
+  }
+
+  setQuestMode(active) {
+    this.questMode = Boolean(active);
+    this.activeCannon = null;
+    this.aimInTraverse = false;
+    this.airborne = false;
+    this.verticalVelocity = 0;
+    this._failedMoveTime = 0;
+    if (this.questMode) {
+      this.sailing?.setAnchored(true);
+      this.handCannon.visible = false;
+      this.dragLook = false;
+      if (document.pointerLockElement === this.dom) document.exitPointerLock?.();
+    } else if (this.handCannon) {
+      this.handCannon.visible = this.handCannonCharges > 0;
+    }
+  }
+
+  setWorldPose(position, worldYaw = 0, pitch = -0.08, eyeHeight = EYE_HEIGHT) {
+    this.ship.group.updateMatrixWorld(true);
+    this.rig.position.copy(this.ship.group.worldToLocal(position.clone()));
+    this.yaw = worldYaw - this.ship.group.rotation.y;
+    this.pitch = pitch;
+    const parentWorld = this.ship.group.getWorldQuaternion(new THREE.Quaternion());
+    const desiredWorld = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), worldYaw);
+    this.rig.quaternion.copy(parentWorld.invert().multiply(desiredWorld));
+    this.camera.position.y = eyeHeight;
+    this.camera.rotation.set(this.pitch, 0, 0);
+    this.airborne = false;
+    this.verticalVelocity = 0;
+    this._lastSafePosition.copy(this.rig.position);
+    this._hasSafePosition = true;
+  }
+
+  setWorldPosition(position, eyeHeight = this.camera.position.y) {
+    this.ship.group.updateMatrixWorld(true);
+    this.rig.position.copy(this.ship.group.worldToLocal(position.clone()));
+    const worldYaw = this.yaw + this.ship.group.rotation.y;
+    const parentWorld = this.ship.group.getWorldQuaternion(new THREE.Quaternion());
+    const desiredWorld = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), worldYaw);
+    this.rig.quaternion.copy(parentWorld.invert().multiply(desiredWorld));
+    this.camera.position.y = eyeHeight;
+    this.camera.rotation.set(this.pitch, 0, 0);
+    this.airborne = false;
+    this.verticalVelocity = 0;
+    this._lastSafePosition.copy(this.rig.position);
+    this._hasSafePosition = true;
   }
 
   _cannonAim(cannon) {
@@ -223,6 +369,10 @@ export class PlayerController {
   _fire() {
     const cannon = this._findNearbyCannon();
     if (!cannon) {
+      if (this.handCannonCharges > 0) {
+        this._fireHandCannon();
+        return;
+      }
       this.onMessage("Подойди к пушке, чтобы выстрелить.");
       return;
     }
@@ -236,20 +386,100 @@ export class PlayerController {
       return;
     }
     const { origin, dir } = aim;
-    cannon.reload = RELOAD;
-    const vel = dir.clone().multiplyScalar(PLAYER_MUZZLE_SPEED);
-    this.projectiles.spawn(origin, vel, { team: "player" });
-    this.effects.muzzleFlash(origin, vel);
+    if (this.grapeshotUnlocked && this.cannonMode === "grapeshot") {
+      cannon.reload = RELOAD * 1.25;
+      this._fireGrapeshot(origin, dir);
+    } else {
+      cannon.reload = RELOAD;
+      const vel = dir.clone().multiplyScalar(PLAYER_MUZZLE_SPEED);
+      this.projectiles.spawn(origin, vel, { team: "player" });
+      this.effects.muzzleFlash(origin, vel);
+    }
   }
 
-  _interactOrFire() {
+  _fireGrapeshot(origin, dir) {
+    const count = 13;
+    const spread = THREE.MathUtils.degToRad(135);
+    for (let i = 0; i < count; i++) {
+      const t = count === 1 ? 0 : i / (count - 1);
+      const yaw = (t - 0.5) * spread + (Math.random() - 0.5) * 0.05;
+      const pelletDir = dir.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
+      pelletDir.y += (Math.random() - 0.5) * 0.055;
+      pelletDir.normalize();
+      this.projectiles.spawn(origin, pelletDir.multiplyScalar(GRAPESHOT_MUZZLE_SPEED), {
+        team: "player",
+        radius: 0.58,
+        ttl: 4.8,
+        kind: "grapeshot",
+        damage: 50,
+      });
+    }
+    this.effects.muzzleFlash(origin, dir);
+  }
+
+  _fireHandCannon() {
+    this.camera.updateWorldMatrix(true, false);
+    const origin = this.camera.getWorldPosition(new THREE.Vector3());
+    const dir = this.camera.getWorldDirection(new THREE.Vector3());
+    origin.addScaledVector(dir, 2.2);
+    const vel = dir.multiplyScalar(PLAYER_MUZZLE_SPEED * 0.92);
+    this.projectiles.spawn(origin, vel, { team: "player", kind: "hand-cannon", damage: 100 });
+    this.effects.muzzleFlash(origin, vel);
+    this.handCannonCharges--;
+    if (this.handCannon) this.handCannon.visible = this.handCannonCharges > 0;
+    this.onMessage(`Ручная пушка: осталось выстрелов ${this.handCannonCharges}.`);
+  }
+
+  _interact() {
     if (this.damageControl?.interact(this.rig, this.camera)) {
       this.verticalVelocity = 0;
       this.airborne = false;
       this._rememberSafePosition();
       return;
     }
-    this._fire();
+    if (this.islandQuest?.interact(this.rig)) {
+      this.verticalVelocity = 0;
+      this.airborne = false;
+      this._rememberSafePosition();
+      return;
+    }
+    if (this.sailing?.interact(this.rig)) {
+      this.verticalVelocity = 0;
+      this.airborne = false;
+      this._rememberSafePosition();
+    }
+  }
+
+  _dumpBucket() {
+    if (this.damageControl?.dumpBucket(this.rig)) {
+      this.verticalVelocity = 0;
+      this.airborne = false;
+      this._rememberSafePosition();
+    }
+  }
+
+  _takePlank() {
+    if (this.damageControl?.takePlank(this.rig, this.camera)) {
+      this.verticalVelocity = 0;
+      this.airborne = false;
+      this._rememberSafePosition();
+    }
+  }
+
+  _scoopWater() {
+    if (this.damageControl?.scoopWater(this.rig, this.camera)) {
+      this.verticalVelocity = 0;
+      this.airborne = false;
+      this._rememberSafePosition();
+    }
+  }
+
+  _patchBreach() {
+    if (this.damageControl?.patchNearestBreach(this.rig)) {
+      this.verticalVelocity = 0;
+      this.airborne = false;
+      this._rememberSafePosition();
+    }
   }
 
   _updateAimPreview() {
@@ -277,16 +507,18 @@ export class PlayerController {
   }
 
   _groundHit(position, dx, dz, stepUp, stepDown) {
-      this._origin.set(position.x + dx, position.y + stepUp + 0.05, position.z + dz);
-      const hits = this._castLocal(this._origin, LOCAL_DOWN, this.walkableMeshes, stepUp + stepDown + 0.1);
-      if (!hits.length) return null;
-      const hit = hits[0];
+    this._origin.set(position.x + dx, position.y + stepUp + 0.05, position.z + dz);
+    const hits = this._castLocal(this._origin, LOCAL_DOWN, this.walkableMeshes, stepUp + stepDown + 0.1);
+    for (const hit of hits) {
       this._hitPoint.copy(hit.point);
       this.ship.group.worldToLocal(this._hitPoint);
+      if (pointInsideCollisionHole(this._hitPoint, this.ship.collisionHoles)) continue;
       return {
         y: this._hitPoint.y,
         onStairs: STAIR_NODE.test(hit.object.name || ""),
       };
+    }
+    return null;
   }
 
   _inStairZone(position, padding = 0) {
@@ -562,15 +794,25 @@ export class PlayerController {
     for (const cannon of this.cannons) {
       if (cannon.reload > 0) cannon.reload -= dt;
     }
+    if (this.questMode || this.islandQuest?.active) {
+      if (document.pointerLockElement === this.dom) document.exitPointerLock?.();
+      this.activeCannon = null;
+      this.aimInTraverse = false;
+      this.prompt = this.islandQuest.getPrompt(this.rig);
+      this.camera.rotation.set(this.pitch, 0, 0);
+      this.aimLine.visible = false;
+      this.marker.visible = false;
+      return;
+    }
 
     // movement on the deck plane (ship-local x/z)
     const f = (this.keys["KeyW"] ? 1 : 0) - (this.keys["KeyS"] ? 1 : 0);
     const s = (this.keys["KeyD"] ? 1 : 0) - (this.keys["KeyA"] ? 1 : 0);
-    if (f || s) {
+    if (!this.sailing?.controlling && (f || s)) {
       const fwd = new THREE.Vector3(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
       const right = new THREE.Vector3(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
       const move = fwd.multiplyScalar(f).add(right.multiplyScalar(s));
-      if (move.lengthSq() > 0) move.normalize().multiplyScalar(WALK_SPEED * dt);
+      if (move.lengthSq() > 0) move.normalize().multiplyScalar(WALK_SPEED * this.walkMultiplier * dt);
       if (this.walkableMeshes.length) {
         let moved = this._tryMove(move.x, move.z);
         if (!moved) {
@@ -606,12 +848,14 @@ export class PlayerController {
     this.camera.rotation.set(this.pitch, 0, 0);
     this._updateAimPreview();
 
-    const interactionPrompt = this.damageControl?.getPrompt(this.rig) || "";
+    const interactionPrompt = this.damageControl?.getPrompt(this.rig) || this.islandQuest?.getPrompt(this.rig) || this.sailing?.getPrompt(this.rig) || "";
     if (interactionPrompt) {
       this.prompt = interactionPrompt;
     } else if (this.activeCannon) {
       this.prompt = this.aimInTraverse
-        ? "Нажми E или кнопку, чтобы выстрелить из этой пушки"
+        ? this.grapeshotUnlocked
+          ? `Нажми ЛКМ. Режим: ${this.cannonMode === "grapeshot" ? "картечь" : "ядро"} · G - сменить`
+          : "Нажми ЛКМ или кнопку, чтобы выстрелить из этой пушки"
         : "Повернись в сектор наведения этой пушки";
     } else {
       this.prompt = this.locked ? "" : "Кликни, чтобы захватить мышь";
@@ -619,19 +863,44 @@ export class PlayerController {
   }
 
   getState() {
+    if (this.questMode || this.islandQuest?.active) {
+      return {
+        prompt: this.prompt,
+        reload: 1,
+        nearCannon: false,
+        canFire: false,
+        fireLabel: "",
+        canDumpBucket: false,
+        canTakePlank: false,
+        canScoopWater: false,
+        canPatchBreach: false,
+        handCannonCharges: this.handCannonCharges,
+        cannonMode: this.cannonMode,
+        canJump: false,
+      };
+    }
     const reload = this.activeCannon?.reload || 0;
-    const canFire = Boolean(this.activeCannon && this.aimInTraverse && reload <= 0);
-    const fireLabel = reload > 0
+    const canUseHandCannon = !this.activeCannon && this.handCannonCharges > 0;
+    const canFire = Boolean((this.activeCannon && this.aimInTraverse && reload <= 0) || canUseHandCannon);
+    const fireLabel = canUseHandCannon
+      ? `Ручная пушка: ${this.handCannonCharges}`
+      : reload > 0
       ? "Перезарядка..."
       : this.aimInTraverse
-        ? "Выстрелить [E]"
+        ? "Выстрелить [ЛКМ]"
         : "Вне сектора";
     return {
       prompt: this.prompt,
       reload: 1 - Math.max(0, reload) / RELOAD,
-      nearCannon: Boolean(this.activeCannon),
+      nearCannon: Boolean(this.activeCannon || canUseHandCannon),
       canFire,
       fireLabel,
+      canDumpBucket: Boolean(this.damageControl?.canDumpBucket(this.rig)),
+      canTakePlank: Boolean(this.damageControl?.canTakePlank(this.rig)),
+      canScoopWater: Boolean(this.damageControl?.canScoopWater(this.rig)),
+      canPatchBreach: Boolean(this.damageControl?.canPatchBreach(this.rig)),
+      handCannonCharges: this.handCannonCharges,
+      cannonMode: this.cannonMode,
       canJump: !this.airborne,
     };
   }

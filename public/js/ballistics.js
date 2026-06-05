@@ -25,7 +25,7 @@ export class ProjectileSystem {
     return m;
   }
 
-  spawn(origin, velocity, { team = "player", radius = 1.4, ttl = 8 } = {}) {
+  spawn(origin, velocity, { team = "player", radius = 1.4, ttl = 8, kind = "round", damage = 100 } = {}) {
     const mesh = this._getMesh();
     mesh.position.copy(origin);
     const p = {
@@ -35,6 +35,8 @@ export class ProjectileSystem {
       team,
       radius,
       ttl,
+      kind,
+      damage,
     };
     this.list.push(p);
     return p;

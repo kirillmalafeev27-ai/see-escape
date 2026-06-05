@@ -3,13 +3,19 @@
 // realistic cannonball fire, wood-debris impacts, and the HUD/main loop.
 import * as THREE from "three";
 import { createWorld } from "./ocean.js";
-import { EffectsSystem } from "./effects.js?v=20260602-native-hold-stairs-v5";
-import { ProjectileSystem } from "./ballistics.js";
-import { buildPlayerShip, SHIP_DEFAULTS } from "./ship.js?v=20260601-model-cannons";
-import { EnemyFleet } from "./enemy.js";
-import { PlayerController } from "./player.js?v=20260602-native-hold-stairs-v5";
-import { DamageControlSystem } from "./damage-control.js?v=20260602-native-hold-stairs-v5";
-import { loadAndAnalyzeShip } from "./models.js?v=20260602-native-hold-stairs-v5";
+import { EffectsSystem } from "./effects.js?v=20260602-raycast-restored-v1";
+import { ProjectileSystem } from "./ballistics.js?v=20260603-bonuses-island-v1";
+import { buildPlayerShip, SHIP_DEFAULTS } from "./ship.js?v=20260603-cannon-line-v6";
+import { EnemyFleet } from "./enemy.js?v=20260603-bonuses-island-v1";
+import { PlayerController } from "./player.js?v=20260604-island-barrage-v5";
+import { DamageControlSystem } from "./damage-control.js?v=20260603-action-buttons-v1";
+import { loadAndAnalyzeShip } from "./models.js?v=20260602-raycast-restored-v1";
+import { applyCollisionProfile, loadAppliedCollisionProfile } from "./collision-profile.js?v=20260602-default-profile-v2";
+import { SailingSystem } from "./sailing.js?v=20260603-bonuses-island-v1";
+import { TreasureSystem } from "./treasure.js?v=20260603-bonuses-island-v1";
+import { IslandFortress } from "./island.js?v=20260603-bonuses-island-v1";
+import { BonusSystem } from "./bonuses.js?v=20260603-bonuses-island-v1";
+import { IslandQuestSystem } from "./island-quest.js?v=20260604-island-barrage-v5";
 
 export async function startGame(container, hud) {
   const world = createWorld(container);
@@ -58,8 +64,11 @@ export async function startGame(container, hud) {
     scene,
     ship,
     effects,
+    waterMaterial: world.water.material,
     onMessage: (m) => m && setMessage(m),
   });
+  const defaultStairZones = ship.stairZones.slice();
+  applyCollisionProfile(ship, loadAppliedCollisionProfile(), { stairZones: defaultStairZones });
 
   // Slowly drifting wind that nudges every cannonball (player reads it off the
   // HUD; the aim preview already bakes it in).
@@ -68,8 +77,15 @@ export async function startGame(container, hud) {
   let windTimer = 0;
 
   const getEnv = () => ({ wind, sampleWaveHeight });
-  const state = { score: 0, over: false };
-  const getPlayerTarget = () => ({ pos: ship.group.position.clone(), vel: new THREE.Vector3() });
+  const state = { score: 0, treasures: 0, over: false, bonuses: {} };
+  const sailing = new SailingSystem({ ship, wind, onMessage: (m) => m && setMessage(m) });
+  const getPlayerTarget = () => ({ pos: ship.group.position.clone(), vel: sailing.velocity.clone() });
+  let bonusSystem = null;
+  const treasures = new TreasureSystem(scene, sampleWaveHeight, () => {
+    state.treasures++;
+    bonusSystem?.showChoices();
+    setMessage("Сундук с сокровищами поднят на борт.");
+  });
 
   // Load + measure the enemy ship model (cheap clones per spawn).
   let enemyDims = { length: 72, beam: 18, deckY: 9, keelY: -9 };
@@ -88,6 +104,20 @@ export async function startGame(container, hud) {
   const fleet = new EnemyFleet(scene, sampleWaveHeight, projectiles, effects, getPlayerTarget, {
     dims: enemyDims,
     factory: enemyFactory,
+    onSunk: (position) => treasures.spawn(position),
+  });
+  const island = new IslandFortress(scene, projectiles, effects, getPlayerTarget);
+  const islandQuest = new IslandQuestSystem({
+    scene,
+    island,
+    ship,
+    sailing,
+    hud,
+    onMessage: (m) => m && setMessage(m),
+    onComplete: () => {
+      state.treasures += 3;
+      winAtIsland();
+    },
   });
 
   const player = new PlayerController({
@@ -99,8 +129,22 @@ export async function startGame(container, hud) {
     effects,
     getEnv,
     fireButton: hud.fireButton,
+    dumpButton: hud.dumpButton,
     jumpButton: hud.jumpButton,
+    takePlankButton: hud.takePlankButton,
+    scoopWaterButton: hud.scoopWaterButton,
+    patchBreachButton: hud.patchBreachButton,
+    islandTeleportButton: hud.islandTeleportButton,
     damageControl,
+    sailing,
+    islandQuest,
+    onMessage: (m) => m && setMessage(m),
+  });
+  islandQuest.setPlayer(player);
+  bonusSystem = new BonusSystem({
+    hud,
+    state,
+    systems: { sailing, player, damageControl },
     onMessage: (m) => m && setMessage(m),
   });
 
@@ -108,12 +152,44 @@ export async function startGame(container, hud) {
   const projEnv = {
     wind,
     sampleWaveHeight,
-    hitTest: (proj) => (proj.team === "player" ? fleet.hitTest(proj) : ship.hullTest(proj.pos)),
+    hitTest: (proj) => (proj.team === "player" ? island.hitTest(proj) || fleet.hitTest(proj) : ship.hullTest(proj.pos)),
     onHit: (proj, hit) => {
       if (proj.team === "player") {
+        if (hit.kind === "islandCannon") {
+          effects.woodImpact(hit.point, hit.normal, 2.2);
+          island.destroyCannon(hit.cannon);
+          const remaining = island.activeCannons().length;
+          setMessage(remaining ? `Береговая пушка уничтожена. Осталось: ${remaining}.` : "Все береговые пушки уничтожены. Крепость обезоружена.");
+          return;
+        }
+        if (hit.kind === "island") {
+          effects.woodImpact(hit.point, hit.normal, 1.25);
+          setMessage("Ядро ударило в камни крепости. Целься по береговым пушкам.");
+          return;
+        }
         if (hit.kind === "sail") {
           effects.woodImpact(hit.point, hit.normal, 0.9);
           setMessage("Попадание по парусам: корпус врага не повреждён.");
+          return;
+        }
+        if (proj.kind === "grapeshot") {
+          effects.woodImpact(hit.point, hit.normal, 1.35);
+          const sunk = fleet.damage(hit.enemy, proj.damage || 50);
+          if (sunk) {
+            state.score++;
+            setMessage("Картечь добила корпус. Враг идёт ко дну.");
+          } else {
+            setMessage("Картечь сорвала половину прочности корпуса.");
+          }
+          return;
+        }
+        if (proj.kind === "hand-cannon") {
+          effects.woodImpact(hit.point, hit.normal, 2.2);
+          const sunk = fleet.damage(hit.enemy, proj.damage || 100);
+          if (sunk) {
+            state.score++;
+            setMessage("Ручная пушка пробила корпус. Враг идёт ко дну.");
+          }
           return;
         }
         effects.woodImpact(hit.point, hit.normal, 2.7);
@@ -121,6 +197,10 @@ export async function startGame(container, hud) {
         state.score++;
         setMessage("Прямое попадание! Враг идёт ко дну ⚓");
       } else {
+        if (islandQuest.active) {
+          effects.waterSplash(hit.point || proj.pos, 0.8);
+          return;
+        }
         effects.woodImpact(hit.point, hit.normal, 1.2);
         registerPlayerHit(hit);
       }
@@ -140,6 +220,29 @@ export async function startGame(container, hud) {
   function loseToFlooding() {
     if (state.over) return;
     state.over = true;
+    const title = hud.gameover.querySelector("h1");
+    const text = hud.gameover.querySelector("p");
+    if (title) {
+      title.textContent = "Корабль потоплен";
+      title.style.color = "#ff7070";
+    }
+    if (text) text.innerHTML = "Нажми <b>R</b>, чтобы начать заново.";
+    hud.gameover.style.display = "flex";
+    document.exitPointerLock?.();
+  }
+
+  function winAtIsland() {
+    if (state.over) return;
+    state.over = true;
+    const title = hud.gameover.querySelector("h1");
+    const text = hud.gameover.querySelector("p");
+    if (title) {
+      title.textContent = "Победа!";
+      title.style.color = "#8dff9e";
+    }
+    if (text) {
+      text.innerHTML = "Сокровище острова взято. Поздравляем!";
+    }
     hud.gameover.style.display = "flex";
     document.exitPointerLock?.();
   }
@@ -165,6 +268,11 @@ export async function startGame(container, hud) {
     requestAnimationFrame(frame);
     const dt = Math.min(clock.getDelta(), 0.05);
     if (!state.over) {
+      if (bonusSystem?.active) {
+        updateHud(dt);
+        renderer.render(scene, camera);
+        return;
+      }
       advanceTime(dt);
 
       windTimer -= dt;
@@ -174,14 +282,24 @@ export async function startGame(container, hud) {
       }
       wind.lerp(windTarget, 1 - Math.exp(-0.4 * dt));
 
+      sailing.update(dt, player.keys);
       ship.applyBuoyancy(sampleWaveHeight, dt);
       ship.group.updateMatrixWorld(true);
 
       player.update(dt);
+      fleet.quizMode = Boolean(islandQuest.active);
       fleet.update(dt, () => {});
+      island.update(dt);
+      islandQuest.update(dt);
       projectiles.update(dt, projEnv);
-      damageControl.update(dt);
-      if (damageControl.waterLevel >= 100) loseToFlooding();
+      if (!islandQuest.active) {
+        damageControl.update(dt);
+      }
+      treasures.update(dt, ship.group.position, {
+        harpoon: Boolean(state.bonuses.harpoon),
+        pullTarget: ship.group.position,
+      });
+      if (!islandQuest.active && damageControl.waterLevel >= 100) loseToFlooding();
       effects.update(dt);
 
       updateHud(dt);
@@ -199,9 +317,14 @@ export async function startGame(container, hud) {
     hud.fireButton.style.display = ps.nearCannon ? "block" : "none";
     hud.fireButton.disabled = !ps.canFire;
     hud.fireButton.textContent = ps.fireLabel;
+    if (hud.dumpButton) hud.dumpButton.style.display = ps.canDumpBucket ? "block" : "none";
+    if (hud.takePlankButton) hud.takePlankButton.style.display = ps.canTakePlank ? "block" : "none";
+    if (hud.scoopWaterButton) hud.scoopWaterButton.style.display = ps.canScoopWater ? "block" : "none";
+    if (hud.patchBreachButton) hud.patchBreachButton.style.display = ps.canPatchBreach ? "block" : "none";
     hud.jumpButton.disabled = !ps.canJump;
 
     hud.score.textContent = `Потоплено: ${state.score}`;
+    hud.treasures.textContent = `Сокровища: ${state.treasures}`;
     hud.integrityBar.style.width = `${dc.waterLevel}%`;
     hud.integrityBar.style.background =
       dc.waterLevel < 35 ? "#4aa9d9" : dc.waterLevel < 70 ? "#e8c25a" : "#e85a5a";
@@ -209,9 +332,13 @@ export async function startGame(container, hud) {
     hud.enemies.textContent = `Врагов на воде: ${fleet.list.filter((e) => !e.sinking).length}`;
 
     const mag = Math.hypot(wind.x, wind.z);
-    const ang = Math.atan2(wind.x, -wind.z);
-    hud.windArrow.style.transform = `rotate(${ang}rad)`;
-    hud.windText.textContent = `${mag.toFixed(1)} м/с`;
+    setRelativeArrow(hud.windArrow, wind);
+    hud.windText.textContent = `${mag.toFixed(1)} м/с · X ${wind.x.toFixed(1)} · Z ${wind.z.toFixed(1)}`;
+    const navigation = sailing.getState();
+    hud.speedText.textContent = `${navigation.speed.toFixed(1)} м/с · паруса ${Math.round(navigation.throttle * 100)}%`;
+    const toIsland = island.position.clone().sub(ship.group.position);
+    setRelativeArrow(hud.compassArrow, toIsland);
+    hud.compassText.textContent = `Крепость: ${Math.round(toIsland.length())} м · пушек: ${island.activeCannons().length}`;
 
     if (msgTimer > 0) {
       msgTimer -= dt;
@@ -222,7 +349,22 @@ export async function startGame(container, hud) {
     }
   }
 
-  setMessage("Подойди к пушке и нажми E. При пробоине открой двери трюма, возьми доску или вычерпывай воду.");
+  function setRelativeArrow(element, worldDirection) {
+    camera.updateWorldMatrix(true, false);
+    const view = camera.getWorldDirection(new THREE.Vector3());
+    view.y = 0;
+    const direction = worldDirection.clone();
+    direction.y = 0;
+    if (view.lengthSq() < 1e-5 || direction.lengthSq() < 1e-5) return;
+    view.normalize();
+    direction.normalize();
+    const viewAngle = Math.atan2(view.x, view.z);
+    const targetAngle = Math.atan2(direction.x, direction.z);
+    const relativeAngle = Math.atan2(Math.sin(targetAngle - viewAngle), Math.cos(targetAngle - viewAngle));
+    element.style.transform = `rotate(${relativeAngle}rad)`;
+  }
+
+  setMessage("ЛКМ стреляет из ближайшей пушки. У штурвала нажми E, чтобы управлять курсом и парусами.");
   frame();
   return world;
 }

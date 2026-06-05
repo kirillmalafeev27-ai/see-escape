@@ -282,7 +282,6 @@ function buildDeckNavigation(walkableMeshes, stairMeshes, navigationRoot) {
 
   for (const floor of floors) {
     const box = new THREE.Box3().setFromObject(floor);
-    if (box.max.y - box.min.y > 1.8) continue;
     const deckY = box.max.y + DECK_SUPPORT_LIFT;
     let parts = [{
       minX: box.min.x + DECK_SUPPORT_INSET,
@@ -323,62 +322,6 @@ function buildDeckNavigation(walkableMeshes, stairMeshes, navigationRoot) {
     }
   }
   navigationRoot.updateMatrixWorld(true);
-}
-
-function collectNavigationSurfaces(navigationRoot) {
-  const surfaces = [];
-  navigationRoot.updateMatrixWorld(true);
-  navigationRoot.traverse((mesh) => {
-    if (!mesh.isMesh) return;
-    const box = new THREE.Box3().setFromObject(mesh);
-    if (/_StairsRamp$/i.test(mesh.name || "")) {
-      const low = mesh.userData.lowLanding;
-      const high = mesh.userData.highLanding;
-      if (!low || !high) return;
-      surfaces.push({
-        kind: "ramp",
-        name: mesh.name,
-        minX: box.min.x,
-        maxX: box.max.x,
-        minZ: Math.min(low[2], high[2]),
-        maxZ: Math.max(low[2], high[2]),
-        startZ: low[2],
-        endZ: high[2],
-        startY: low[1],
-        endY: high[1],
-        onStairs: true,
-      });
-      return;
-    }
-    if (!/(?:DeckSupport|GrateFloor)/i.test(mesh.name || "")) return;
-    surfaces.push({
-      kind: "flat",
-      name: mesh.name,
-      minX: box.min.x,
-      maxX: box.max.x,
-      minZ: box.min.z,
-      maxZ: box.max.z,
-      y: box.max.y,
-      onStairs: /GrateFloor$/i.test(mesh.name || ""),
-    });
-  });
-  return surfaces;
-}
-
-function collectNavigationBlockers(mastColliders) {
-  return mastColliders.map((mesh) => {
-    const box = new THREE.Box3().setFromObject(mesh);
-    return {
-      kind: "circle",
-      name: mesh.name,
-      x: (box.min.x + box.max.x) / 2,
-      z: (box.min.z + box.max.z) / 2,
-      radius: Math.max(box.max.x - box.min.x, box.max.z - box.min.z) / 2,
-      minY: box.min.y,
-      maxY: box.max.y,
-      active: true,
-    };
-  });
 }
 
 function stripCannonWheels(geometry) {
@@ -548,8 +491,6 @@ export async function loadAndAnalyzeShip(url, { targetLength, flip = false, draf
   buildStairNavigation(stairMeshes, walkableMeshes, navigationRoot);
   buildDeckNavigation(walkableMeshes, stairMeshes, navigationRoot);
   solidMeshes.push(...mastColliders);
-  const navigationSurfaces = collectNavigationSurfaces(navigationRoot);
-  const navigationBlockers = collectNavigationBlockers(mastColliders);
   const cannonTemplate = extractCannonTemplate(root);
   const stairZones = stairMeshes.map((mesh) => {
     const box = new THREE.Box3().setFromObject(mesh);
@@ -561,7 +502,6 @@ export async function loadAndAnalyzeShip(url, { targetLength, flip = false, draf
     box.max.z += 1.8;
     return box;
   });
-
   pivot.traverse((o) => {
     if (o.isMesh) {
       o.castShadow = o.receiveShadow = false;
@@ -580,8 +520,6 @@ export async function loadAndAnalyzeShip(url, { targetLength, flip = false, draf
     walkableMeshes,
     solidMeshes,
     stairZones,
-    navigationSurfaces,
-    navigationBlockers,
     cannonTemplate,
   };
 }
