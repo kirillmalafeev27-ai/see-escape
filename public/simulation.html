@@ -27,7 +27,7 @@
       .learning-status { align-self: start; padding: 6px 9px; border-radius: 999px; border: 1px solid rgba(255,255,255,0.14); color: #cfe6f3; font-size: 0.74rem; white-space: nowrap; }
       .learning-menu[data-status="online"] .learning-status { color: #8dff9e; border-color: rgba(141,255,158,0.3); background: rgba(141,255,158,0.09); }
       .learning-menu[data-status="loading"] .learning-status { color: #ffe27a; border-color: rgba(255,226,122,0.34); background: rgba(255,226,122,0.09); }
-      .learning-controls { display: grid; grid-template-columns: 1.1fr 0.9fr; gap: 12px; }
+      .learning-controls { display: grid; grid-template-columns: minmax(260px, 1.25fr) minmax(220px, 0.75fr); gap: 12px; }
       .control-block, .learning-form, .field { display: grid; gap: 8px; }
       .segmented { display: grid; gap: 4px; padding: 4px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.12); background: rgba(255,255,255,0.07); }
       .mode-row { grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -38,8 +38,6 @@
       .field select { width: 100%; min-height: 40px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.14); background: rgba(255,255,255,0.09); color: #eaf6ff; padding: 0 10px; font: inherit; font-size: 0.82rem; color-scheme: dark; }
       .field select option { background: #071927; color: #eaf6ff; }
       .slot-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
-      .learning-menu.classic .learning-select, .learning-menu.classic .slot-grid { display: none; }
-      .learning-menu.audio .slot-grid { display: none; }
 
       #actionQuiz { position: fixed; left: 50%; top: 50%; transform: translate(-50%,-50%); z-index: 86; width: min(620px, calc(100vw - 28px)); display: grid; gap: 12px; padding: 16px; pointer-events: auto; background: rgba(4,18,28,0.9); box-shadow: 0 20px 70px rgba(0,0,0,0.48); }
       .action-quiz-head { display: flex; justify-content: space-between; gap: 12px; align-items: center; color: #ffe27a; }
@@ -174,7 +172,7 @@
       <div class="boot-box panel">
         <div class="boot-copy">
           <h1>Морской бой</h1>
-          <p>Перед боем выбери учебный режим, уровень и темы. После нажатия старта игра заранее подготовит 15 заданий, а дальше каждое действие у пушки или пробоины будет проходить через короткий ответ.</p>
+          <p>Перед боем выбери уровень и одну грамматическую тему. После старта игра заранее подготовит 15 заданий, а дальше эта тема будет проверяться у пушек и при ремонте пробоин.</p>
         </div>
         <button id="start" class="primary" type="button">Начать игру</button>
       </div>
@@ -260,9 +258,9 @@
     <div id="loader"><div class="spinner"></div><div>Загрузка моря…</div></div>
     <div id="err"><div><h2 style="color:#ff8080">Не удалось запустить</h2><pre id="errmsg"></pre></div></div>
 
-    <script src="./js/learning.js?v=20260615-audio-replay-v1"></script>
+    <script src="./js/learning.js?v=20260615-one-topic-v1"></script>
     <script type="module">
-    import { startGame } from "./js/game.js?v=20260615-once-hints-v1";
+    import { startGame } from "./js/game.js?v=20260615-render-fixes-v1";
 
       const $ = (id) => document.getElementById(id);
       const loaderEl = $("loader");
@@ -323,7 +321,7 @@
         loaderEl.style.display = "flex";
         loaderEl.classList.remove("hidden");
         try {
-          await window.prepareMostyQuiz?.({ floors: 15, startFloor: 1 });
+          await window.prepareSeaQuiz?.({ floors: 15, startFloor: 1 });
         } catch (error) {
           console.warn("Question prefetch failed, fallback questions will be used:", error);
         }
