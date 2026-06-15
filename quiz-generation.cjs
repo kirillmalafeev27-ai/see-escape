@@ -1,17 +1,37 @@
 const questionPool = Object.create(null);
 const audioQuestionPool = Object.create(null);
 const ttsAudioCache = new Map();
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const crypto = require('node:crypto');
 
-const DEFAULT_MODELS = 'gpt-5.4,gpt-5.2,gpt-5,gpt-5-mini,gpt-4o,gpt-4o-mini';
-const AITUNNEL_MODELS = (process.env.AITUNNEL_MODELS || DEFAULT_MODELS)
+const DEFAULT_MODELS = 'gpt-4o-mini,gpt-4o';
+const AI_MODELS_SOURCE =
+  process.env.AI_MODELS ||
+  process.env.AITUNNEL_MODELS ||
+  process.env.OPENAI_MODELS ||
+  process.env.AI_MODEL ||
+  process.env.AITUNNEL_MODEL ||
+  process.env.OPENAI_MODEL ||
+  DEFAULT_MODELS;
+const AITUNNEL_MODELS = AI_MODELS_SOURCE
   .split(',')
   .map((model) => model.trim())
   .filter(Boolean);
 
-const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY || process.env.ELEVEN_API_KEY || '';
+const ELEVENLABS_API_KEY =
+  process.env.ELEVENLABS_API_KEY ||
+  process.env.ELEVEN_API_KEY ||
+  process.env.ELEVENLABS_KEY ||
+  process.env.ELEVENLABS_API_TOKEN ||
+  '';
 const ELEVENLABS_VOICE_ID = process.env.ELEVENLABS_VOICE_ID || '21m00Tcm4TlvDq8ikWAM';
-const ELEVENLABS_MODEL_ID = process.env.ELEVENLABS_MODEL_ID || 'eleven_turbo_v2_5';
+const ELEVENLABS_MODEL_ID = process.env.ELEVENLABS_MODEL_ID || process.env.ELEVENLABS_MODEL || 'eleven_multilingual_v2';
 const TTS_CACHE_LIMIT = Number(process.env.TTS_CACHE_LIMIT || 180);
+const TTS_DISK_CACHE_DIR = process.env.TTS_CACHE_DIR || path.join(os.tmpdir(), 'see-escape-tts-cache');
+const AI_TIMEOUT_MS = Number(process.env.AI_TIMEOUT_MS || 45_000);
+const TTS_TIMEOUT_MS = Number(process.env.TTS_TIMEOUT_MS || 30_000);
 
 const TOPIC_RULES = {
   'Infinitiv mit zu': `Verwende NUR Verben, die "zu + Infinitiv" verlangen: versuchen, beginnen, anfangen, aufhören, vorhaben, hoffen, vergessen, planen, sich freuen, Lust haben, Es ist wichtig/möglich/schwer... NIEMALS Modalverben (können, müssen, sollen, wollen, dürfen, mögen) — diese stehen mit Infinitiv OHNE "zu"! Richtig: "Er versucht, den Bahnhof zu finden." | Falsch: "Er kann den Bahnhof zu finden."`,
@@ -62,13 +82,35 @@ const TOPIC_RULES = {
 };
 
 function aiKey() {
-  return process.env.AITUNNEL_API_KEY || process.env.OPENAI_API_KEY || '';
+  return process.env.AITUNNEL_API_KEY ||
+    process.env.AI_TUNNEL_API_KEY ||
+    process.env.AITUNNEL_TOKEN ||
+    process.env.OPENAI_API_KEY ||
+    process.env.AI_API_KEY ||
+    '';
+}
+
+function usesAiTunnel() {
+  return Boolean(process.env.AITUNNEL_API_KEY || process.env.AI_TUNNEL_API_KEY || process.env.AITUNNEL_TOKEN);
 }
 
 function aiBaseUrl() {
   if (process.env.AI_BASE_URL) return process.env.AI_BASE_URL.replace(/\/$/, '');
   if (process.env.OPENAI_BASE_URL) return process.env.OPENAI_BASE_URL.replace(/\/$/, '');
-  return process.env.AITUNNEL_API_KEY ? 'https://api.aitunnel.ru/v1' : 'https://api.openai.com/v1';
+  return usesAiTunnel() ? 'https://api.aitunnel.ru/v1' : 'https://api.openai.com/v1';
+}
+
+function aiProvider() {
+  if (usesAiTunnel()) return 'aitunnel';
+  if (aiKey()) return 'openai-compatible';
+  return 'fallback';
+}
+
+function fetchWithTimeout(url, options = {}, timeoutMs = 30_000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  return fetch(url, { ...options, signal: controller.signal })
+    .finally(() => clearTimeout(timer));
 }
 
 function isValidQuestion(question) {
@@ -498,7 +540,7 @@ Write exactly ${questionsCount} objects now.`;
 async function requestAiText(prompt, maxTokens) {
   const key = aiKey();
   if (!key) {
-    const error = new Error('AITUNNEL_API_KEY is not configured');
+    const error = new Error('AI API key is not configured. Set AITUNNEL_API_KEY, AI_TUNNEL_API_KEY, OPENAI_API_KEY, or AI_API_KEY.');
     error.statusCode = 503;
     throw error;
   }
@@ -506,7 +548,7 @@ async function requestAiText(prompt, maxTokens) {
   const errors = [];
   for (const model of AITUNNEL_MODELS) {
     try {
-      const response = await fetch(`${aiBaseUrl()}/chat/completions`, {
+      const response = await fetchWithTimeout(`${aiBaseUrl()}/chat/completions`, {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${key}`,
@@ -517,7 +559,7 @@ async function requestAiText(prompt, maxTokens) {
           max_tokens: maxTokens,
           messages: [{ role: 'user', content: prompt }],
         }),
-      });
+      }, AI_TIMEOUT_MS);
 
       const bodyText = await response.text();
       if (!response.ok) {
@@ -530,11 +572,11 @@ async function requestAiText(prompt, maxTokens) {
       if (content && content.trim()) return content.trim();
       errors.push(`${model}: empty response`);
     } catch (error) {
-      errors.push(`${model}: ${error?.message || String(error)}`);
+      errors.push(`${model}: ${error?.name === 'AbortError' ? `timeout after ${AI_TIMEOUT_MS}ms` : error?.message || String(error)}`);
     }
   }
 
-  const error = new Error(`AI Tunnel: all models failed: ${errors.join(' | ')}`);
+  const error = new Error(`AI generation failed via ${aiProvider()}: ${errors.join(' | ')}`);
   error.statusCode = 502;
   throw error;
 }
@@ -548,6 +590,35 @@ function putTtsCache(key, entry) {
   }
 }
 
+function ttsDiskPath(cacheKey) {
+  const hash = crypto.createHash('sha256').update(cacheKey).digest('hex');
+  return path.join(TTS_DISK_CACHE_DIR, `${hash}.mp3`);
+}
+
+function readTtsDiskCache(cacheKey) {
+  try {
+    const filePath = ttsDiskPath(cacheKey);
+    if (!fs.existsSync(filePath)) return null;
+    const buffer = fs.readFileSync(filePath);
+    if (!buffer.length) return null;
+    const entry = { buffer, contentType: 'audio/mpeg' };
+    putTtsCache(cacheKey, entry);
+    return entry;
+  } catch (error) {
+    console.warn('TTS disk cache read failed:', error?.message || error);
+    return null;
+  }
+}
+
+function writeTtsDiskCache(cacheKey, buffer) {
+  try {
+    fs.mkdirSync(TTS_DISK_CACHE_DIR, { recursive: true });
+    fs.writeFileSync(ttsDiskPath(cacheKey), buffer);
+  } catch (error) {
+    console.warn('TTS disk cache write failed:', error?.message || error);
+  }
+}
+
 function installQuizRoutes(app) {
   app.get('/healthz', (_req, res) => {
     res.json({ ok: true });
@@ -558,7 +629,13 @@ function installQuizRoutes(app) {
       ok: true,
       generationConfigured: Boolean(aiKey()),
       ttsConfigured: Boolean(ELEVENLABS_API_KEY),
+      aiProvider: aiProvider(),
+      aiBaseUrl: aiBaseUrl(),
       models: AITUNNEL_MODELS,
+      ttsProvider: ELEVENLABS_API_KEY ? 'elevenlabs' : 'browser-fallback',
+      ttsVoiceId: ELEVENLABS_VOICE_ID,
+      ttsModelId: ELEVENLABS_MODEL_ID,
+      ttsDiskCache: TTS_DISK_CACHE_DIR,
     });
   });
 
@@ -663,9 +740,16 @@ function installQuizRoutes(app) {
       res.setHeader('X-TTS-Cache', 'HIT');
       return res.send(cached.buffer);
     }
+    const diskCached = readTtsDiskCache(cacheKey);
+    if (diskCached) {
+      res.setHeader('Content-Type', diskCached.contentType);
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      res.setHeader('X-TTS-Cache', 'DISK');
+      return res.send(diskCached.buffer);
+    }
 
     try {
-      const ttsResponse = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(ELEVENLABS_VOICE_ID)}`, {
+      const ttsResponse = await fetchWithTimeout(`https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(ELEVENLABS_VOICE_ID)}`, {
         method: 'POST',
         headers: {
           Accept: 'audio/mpeg',
@@ -681,7 +765,7 @@ function installQuizRoutes(app) {
             use_speaker_boost: true,
           },
         }),
-      });
+      }, TTS_TIMEOUT_MS);
 
       if (!ttsResponse.ok) {
         const detail = await ttsResponse.text().catch(() => '');
@@ -693,12 +777,16 @@ function installQuizRoutes(app) {
       if (!buffer.length) return res.status(502).json({ error: 'ElevenLabs returned empty audio' });
 
       putTtsCache(cacheKey, { buffer, contentType });
+      writeTtsDiskCache(cacheKey, buffer);
       res.setHeader('Content-Type', contentType);
       res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
       res.setHeader('X-TTS-Cache', 'MISS');
       res.send(buffer);
     } catch (error) {
-      res.status(502).json({ error: 'ElevenLabs TTS request failed', detail: error?.message || String(error) });
+      res.status(502).json({
+        error: 'ElevenLabs TTS request failed',
+        detail: error?.name === 'AbortError' ? `timeout after ${TTS_TIMEOUT_MS}ms` : error?.message || String(error),
+      });
     }
   });
 }

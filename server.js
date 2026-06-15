@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
+import zlib from "node:zlib";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 
@@ -27,6 +28,8 @@ const MIME = new Map([
   [".gltf", "model/gltf+json"],
   [".bin", "application/octet-stream"],
 ]);
+const COMPRESSIBLE = new Set([".html", ".js", ".css", ".json", ".svg"]);
+const LARGE_ASSET = new Set([".glb", ".gltf", ".bin", ".jpg", ".jpeg", ".png", ".webp"]);
 
 function send(res, status, body, headers = {}) {
   if (res.writableEnded) return;
@@ -142,11 +145,34 @@ function serveFile(req, res, filePath) {
     }
 
     const ext = path.extname(filePath).toLowerCase();
+    const cacheControl = ext === ".html"
+      ? "no-cache"
+      : (req.url || "").includes("?v=") || LARGE_ASSET.has(ext)
+        ? "public, max-age=31536000, immutable"
+        : "public, max-age=3600";
     const headers = {
       "Content-Type": MIME.get(ext) || "application/octet-stream",
       "Content-Length": stat.size,
-      "Cache-Control": ext === ".html" ? "no-cache" : "public, max-age=3600",
+      "Cache-Control": cacheControl,
+      "Accept-Ranges": "bytes",
     };
+
+    const range = req.headers.range;
+    if (range && /^bytes=\d*-\d*$/.test(range)) {
+      const [startRaw, endRaw] = range.replace("bytes=", "").split("-");
+      const start = startRaw === "" ? Math.max(0, stat.size - Number(endRaw || 0)) : Number(startRaw);
+      const end = endRaw === "" ? stat.size - 1 : Math.min(stat.size - 1, Number(endRaw));
+      if (Number.isFinite(start) && Number.isFinite(end) && start <= end && start < stat.size) {
+        res.writeHead(206, {
+          ...headers,
+          "Content-Length": end - start + 1,
+          "Content-Range": `bytes ${start}-${end}/${stat.size}`,
+        });
+        if (req.method === "HEAD") return res.end();
+        fs.createReadStream(filePath, { start, end }).pipe(res);
+        return;
+      }
+    }
 
     if (req.method === "HEAD") {
       send(res, 200, "", headers);
@@ -154,8 +180,21 @@ function serveFile(req, res, filePath) {
     }
 
     const stream = fs.createReadStream(filePath);
-    res.writeHead(200, headers);
-    stream.pipe(res);
+    const accepts = String(req.headers["accept-encoding"] || "");
+    if (COMPRESSIBLE.has(ext) && /\bbr\b/.test(accepts)) {
+      const compressedHeaders = { ...headers, "Content-Encoding": "br", Vary: "Accept-Encoding" };
+      delete compressedHeaders["Content-Length"];
+      res.writeHead(200, compressedHeaders);
+      stream.pipe(zlib.createBrotliCompress()).pipe(res);
+    } else if (COMPRESSIBLE.has(ext) && /\bgzip\b/.test(accepts)) {
+      const compressedHeaders = { ...headers, "Content-Encoding": "gzip", Vary: "Accept-Encoding" };
+      delete compressedHeaders["Content-Length"];
+      res.writeHead(200, compressedHeaders);
+      stream.pipe(zlib.createGzip()).pipe(res);
+    } else {
+      res.writeHead(200, headers);
+      stream.pipe(res);
+    }
     stream.on("error", () => {
       if (!res.headersSent) send(res, 500, "Internal server error");
       else res.destroy();

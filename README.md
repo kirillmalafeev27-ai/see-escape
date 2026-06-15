@@ -102,6 +102,24 @@ This repo ships a [`render.yaml`](./render.yaml) Blueprint, so deployment is one
    - **Health check path:** `/healthz`
 3. Deploy. Render injects `PORT`; the server binds to `0.0.0.0:$PORT`.
 
+### AI and voice env vars
+
+For generated German grammar tasks set one AI key:
+
+- `AITUNNEL_API_KEY` or `AI_TUNNEL_API_KEY` for AI Tunnel
+- `OPENAI_API_KEY` for an OpenAI-compatible `/chat/completions` endpoint
+- optional `AI_MODELS`, for example `gpt-4o-mini,gpt-4o`
+- optional `OPENAI_BASE_URL` or `AI_BASE_URL` for custom gateways
+
+For ElevenLabs speech set:
+
+- `ELEVENLABS_API_KEY`
+- optional `ELEVENLABS_VOICE_ID`
+- optional `ELEVENLABS_MODEL_ID` (default: `eleven_multilingual_v2`)
+
+Check production config at `/api/quiz/status`. It reports whether generation and
+TTS are configured without exposing secrets.
+
 ## Project structure
 
 ```
