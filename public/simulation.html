@@ -10,6 +10,53 @@
       #app { position: fixed; inset: 0; }
       canvas { display: block; }
       .panel { background: rgba(4,18,28,0.55); border: 1px solid rgba(120,200,255,0.25); border-radius: 12px; backdrop-filter: blur(6px); }
+      [hidden] { display: none !important; }
+      .primary { min-height: 44px; padding: 12px 18px; border: 0; border-radius: 8px; background: #ffe27a; color: #1b1607; font: 900 0.92rem "Segoe UI", system-ui, sans-serif; cursor: pointer; box-shadow: 0 10px 26px rgba(255,226,122,0.18); }
+      .primary:disabled { cursor: wait; opacity: 0.72; box-shadow: none; }
+
+      #boot { position: fixed; inset: 0; z-index: 90; display: grid; place-items: center; padding: 28px; background: radial-gradient(circle at 50% 20%, #1a5276 0%, #0b2a3d 48%, #04121c 100%); }
+      #boot .boot-box { width: min(1060px, calc(100vw - 36px)); max-height: calc(100vh - 36px); overflow: auto; display: grid; grid-template-columns: minmax(250px, 0.8fr) minmax(0, 1.2fr); gap: 24px; align-items: start; padding: 24px; border-radius: 8px; background: rgba(4,18,28,0.78); box-shadow: 0 24px 80px rgba(0,0,0,0.45); }
+      .boot-copy { display: grid; gap: 12px; }
+      .boot-copy h1 { margin: 0; color: #ffe27a; font-size: clamp(2rem, 4vw, 4.2rem); line-height: 0.95; letter-spacing: 0; }
+      .boot-copy p { margin: 0; color: #cfe6f3; line-height: 1.55; font-size: 0.92rem; }
+      #start { grid-column: 1; justify-self: start; }
+      .learning-menu { grid-column: 2; grid-row: 1 / span 2; display: grid; gap: 16px; min-width: 0; }
+      .learning-head { display: flex; justify-content: space-between; gap: 12px; padding-bottom: 12px; border-bottom: 1px solid rgba(255,255,255,0.12); }
+      .learning-kicker, .control-label, .field span { color: #8fd8c6; font-size: 0.68rem; font-weight: 900; letter-spacing: 0.12em; text-transform: uppercase; }
+      .learning-title { color: #eaf6ff; font-size: 1.15rem; font-weight: 900; margin-top: 2px; }
+      .learning-status { align-self: start; padding: 6px 9px; border-radius: 999px; border: 1px solid rgba(255,255,255,0.14); color: #cfe6f3; font-size: 0.74rem; white-space: nowrap; }
+      .learning-menu[data-status="online"] .learning-status { color: #8dff9e; border-color: rgba(141,255,158,0.3); background: rgba(141,255,158,0.09); }
+      .learning-menu[data-status="loading"] .learning-status { color: #ffe27a; border-color: rgba(255,226,122,0.34); background: rgba(255,226,122,0.09); }
+      .learning-controls { display: grid; grid-template-columns: 1.1fr 0.9fr; gap: 12px; }
+      .control-block, .learning-form, .field { display: grid; gap: 8px; }
+      .segmented { display: grid; gap: 4px; padding: 4px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.12); background: rgba(255,255,255,0.07); }
+      .mode-row { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .level-row { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+      .segmented button { min-width: 0; border: 0; border-radius: 6px; background: transparent; color: #d9edf7; padding: 9px 8px; font: inherit; font-size: 0.76rem; font-weight: 900; cursor: pointer; }
+      .segmented button:hover { background: rgba(255,255,255,0.08); }
+      .segmented button.selected { background: #ffe27a; color: #1b1607; }
+      .field select { width: 100%; min-height: 40px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.14); background: rgba(255,255,255,0.09); color: #eaf6ff; padding: 0 10px; font: inherit; font-size: 0.82rem; color-scheme: dark; }
+      .field select option { background: #071927; color: #eaf6ff; }
+      .slot-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
+      .learning-menu.classic .learning-select, .learning-menu.classic .slot-grid { display: none; }
+      .learning-menu.audio .slot-grid { display: none; }
+
+      #actionQuiz { position: fixed; left: 50%; top: 50%; transform: translate(-50%,-50%); z-index: 86; width: min(620px, calc(100vw - 28px)); display: grid; gap: 12px; padding: 16px; pointer-events: auto; background: rgba(4,18,28,0.9); box-shadow: 0 20px 70px rgba(0,0,0,0.48); }
+      .action-quiz-head { display: flex; justify-content: space-between; gap: 12px; align-items: center; color: #ffe27a; }
+      .action-quiz-head b { font-size: 1rem; }
+      .action-quiz-head span { color: #8fd8c6; font-size: 0.78rem; font-weight: 800; }
+      .action-quiz-question { display: grid; gap: 6px; color: #fff; font-weight: 800; line-height: 1.35; }
+      .action-quiz-question span { color: #cfe6f3; font-weight: 700; }
+      .action-quiz-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+      .action-quiz-options button { min-height: 44px; display: flex; gap: 8px; align-items: center; justify-content: flex-start; padding: 9px 10px; border: 1px solid rgba(255,226,122,0.72); border-radius: 8px; background: rgba(70,42,15,0.88); color: #ffe27a; font: 800 0.82rem "Segoe UI", system-ui, sans-serif; text-align: left; cursor: pointer; }
+      .action-quiz-options button span { flex: 0 0 auto; display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: rgba(255,226,122,0.18); color: #fff; }
+      .action-quiz-options button.correct { border-color: rgba(141,255,158,0.9); background: rgba(20,72,38,0.95); color: #caffd5; }
+      .action-quiz-options button.wrong { border-color: rgba(255,112,112,0.9); background: rgba(92,23,26,0.95); color: #ffd2d2; }
+      .action-quiz-options button:disabled { cursor: default; }
+      .action-quiz-status { color: #cfe6f3; font-size: 0.78rem; line-height: 1.35; }
+      #audio-repeat { position: fixed; top: 292px; right: 14px; z-index: 88; display: none; width: 40px; height: 40px; border: 1px solid rgba(255,226,122,0.78); border-radius: 50%; background: rgba(63,47,17,0.9); color: #ffe27a; font-weight: 900; cursor: pointer; }
+      #audio-repeat.on { display: block; }
+      #audio-repeat.loading { opacity: 0.58; }
 
       #topleft { position: fixed; top: 14px; left: 14px; z-index: 10; padding: 12px 16px; font-size: 0.82rem; line-height: 1.7; pointer-events: none; }
       #topleft b { color: #7fd8ff; }
@@ -17,7 +64,9 @@
       .bar > div { height: 100%; width: 100%; transition: width 0.2s ease, background 0.3s; }
 
       #topright { position: fixed; top: 14px; right: 14px; z-index: 10; padding: 10px 16px; font-size: 0.82rem; text-align: center; pointer-events: none; }
-      #windArrow { display: inline-block; font-size: 1.6rem; color: #7fd8ff; line-height: 1; }
+      #compass { position: fixed; top: 135px; right: 14px; z-index: 10; width: 190px; padding: 10px 12px; font-size: 0.78rem; text-align: center; pointer-events: none; }
+      #windArrow, #compassArrow { display: inline-block; font-size: 1.6rem; color: #7fd8ff; line-height: 1; }
+      #compassArrow { color: #ffe27a; }
 
       #hint { position: fixed; bottom: 14px; left: 14px; z-index: 10; padding: 10px 14px; font-size: 0.76rem; line-height: 1.6; max-width: 320px; pointer-events: none; }
       #hint b { color: #7fd8ff; }
@@ -31,6 +80,25 @@
 
       #reloadWrap { position: fixed; bottom: 50px; left: 50%; transform: translateX(-50%); z-index: 11; width: 240px; display: none; pointer-events: none; }
       #reloadWrap .lbl { font-size: 0.7rem; color: #bcdcee; text-align: center; margin-bottom: 3px; }
+      #fireButton { position: fixed; bottom: 104px; left: 50%; transform: translateX(-50%); z-index: 20; display: none; padding: 12px 22px; border: 1px solid rgba(255,226,122,0.85); border-radius: 9px; background: rgba(70,42,15,0.88); color: #ffe27a; font: 700 0.9rem "Segoe UI", system-ui, sans-serif; cursor: pointer; box-shadow: 0 3px 14px rgba(0,0,0,0.35); }
+      #fireButton:hover:not(:disabled) { background: rgba(105,63,20,0.95); }
+      #fireButton:disabled { cursor: default; opacity: 0.55; }
+      #dumpButton { position: fixed; bottom: 158px; left: 50%; transform: translateX(-50%); z-index: 20; display: none; padding: 12px 22px; border: 1px solid rgba(127,216,255,0.85); border-radius: 9px; background: rgba(9,54,78,0.88); color: #bcecff; font: 700 0.9rem "Segoe UI", system-ui, sans-serif; cursor: pointer; box-shadow: 0 3px 14px rgba(0,0,0,0.35); }
+      #dumpButton:hover { background: rgba(14,81,114,0.95); }
+      #jumpButton { position: fixed; bottom: 74px; right: 22px; z-index: 20; padding: 12px 18px; border: 1px solid rgba(127,216,255,0.85); border-radius: 9px; background: rgba(9,54,78,0.88); color: #bcecff; font: 700 0.9rem "Segoe UI", system-ui, sans-serif; cursor: pointer; box-shadow: 0 3px 14px rgba(0,0,0,0.35); }
+      #jumpButton:hover:not(:disabled) { background: rgba(14,81,114,0.95); }
+      #jumpButton:disabled { cursor: default; opacity: 0.55; }
+      .deckActionButton { position: fixed; right: 22px; z-index: 21; display: none; min-width: 190px; padding: 11px 14px; border: 1px solid rgba(127,216,255,0.85); border-radius: 9px; background: rgba(9,54,78,0.9); color: #bcecff; font: 700 0.86rem "Segoe UI", system-ui, sans-serif; cursor: pointer; box-shadow: 0 3px 14px rgba(0,0,0,0.35); }
+      .deckActionButton:hover { background: rgba(14,81,114,0.96); }
+      #takePlankButton { bottom: 128px; }
+      #scoopWaterButton { bottom: 182px; }
+      #patchBreachButton { bottom: 236px; border-color: rgba(255,226,122,0.85); background: rgba(70,42,15,0.9); color: #ffe27a; }
+      #patchBreachButton:hover { background: rgba(105,63,20,0.96); }
+      #islandTeleportButton { position: fixed; top: 64px; left: 50%; transform: translateX(-50%); z-index: 25; padding: 10px 15px; border: 1px solid rgba(126,255,159,0.78); border-radius: 9px; background: rgba(20,72,38,0.88); color: #caffd5; font: 700 0.82rem "Segoe UI", system-ui, sans-serif; cursor: pointer; box-shadow: 0 3px 14px rgba(0,0,0,0.35); }
+      #islandTeleportButton:hover { background: rgba(27,99,51,0.95); }
+      #audioGuideButton { position: fixed; top: 246px; right: 14px; z-index: 26; padding: 9px 12px; border: 1px solid rgba(255,226,122,0.78); border-radius: 8px; background: rgba(63,47,17,0.9); color: #ffe27a; font: 800 0.76rem "Segoe UI", system-ui, sans-serif; cursor: pointer; box-shadow: 0 3px 14px rgba(0,0,0,0.35); }
+      #audioGuideButton:hover:not(:disabled) { background: rgba(91,68,24,0.96); }
+      #audioGuideButton:disabled { cursor: default; opacity: 0.58; }
 
       #msg { position: fixed; top: 22%; left: 50%; transform: translateX(-50%); z-index: 12; font-size: 1rem; font-weight: 600; color: #fff; text-shadow: 0 2px 8px #000; opacity: 0; transition: opacity 0.5s ease; text-align: center; max-width: 80%; pointer-events: none; }
 
@@ -41,6 +109,36 @@
       #gameover p { color: #bcdcee; }
 
       #back { position: fixed; bottom: 14px; right: 14px; z-index: 10; text-decoration: none; font-size: 0.78rem; padding: 8px 14px; color: #eaf6ff; }
+      #sandboxLink { position: fixed; top: 14px; left: calc(50% - 95px); transform: translateX(-50%); z-index: 20; text-decoration: none; font-size: 0.82rem; font-weight: 700; padding: 10px 15px; color: #ffe27a; background: rgba(70,42,15,0.88); border: 1px solid rgba(255,226,122,0.7); border-radius: 9px; }
+      #islandSandboxLink { position: fixed; top: 14px; left: calc(50% + 105px); transform: translateX(-50%); z-index: 20; text-decoration: none; font-size: 0.82rem; font-weight: 700; padding: 10px 15px; color: #caffd5; background: rgba(20,72,38,0.88); border: 1px solid rgba(126,255,159,0.7); border-radius: 9px; }
+
+      #bonusChoice { position: fixed; inset: 0; z-index: 65; display: none; align-items: center; justify-content: center; background: rgba(2,8,13,0.74); padding: 24px; }
+      #bonusChoice .bonus-box { width: min(920px, 96vw); padding: 20px; text-align: center; }
+      #bonusChoice h2 { color: #ffe27a; margin-bottom: 8px; }
+      #bonusChoice p { color: #bcdcee; margin-bottom: 16px; }
+      #bonusCards { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 14px; }
+      .bonus-card { min-height: 160px; padding: 16px; border: 1px solid rgba(255,226,122,0.72); border-radius: 12px; background: rgba(70,42,15,0.9); color: #eaf6ff; text-align: left; cursor: pointer; font: inherit; box-shadow: 0 10px 24px rgba(0,0,0,0.32); }
+      .bonus-card:hover { background: rgba(105,63,20,0.95); transform: translateY(-2px); }
+      .bonus-card b { display: block; color: #ffe27a; font-size: 1rem; margin-bottom: 8px; }
+      .bonus-card span { display: block; color: #d9edf7; font-size: 0.82rem; line-height: 1.45; }
+
+      #questPanel { position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%); z-index: 80; width: min(620px, calc(100vw - 28px)); display: none; padding: 14px; pointer-events: auto; }
+      #questPanel h3 { color: #ffe27a; margin-bottom: 8px; }
+      #questStatus { color: #bcdcee; font-size: 0.76rem; line-height: 1.35; margin-bottom: 10px; }
+      #questGrid { display: none; grid-template-columns: repeat(5, 1fr); gap: 5px; margin-bottom: 10px; }
+      #questGrid.direction-picker { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; }
+      .quest-dir-button { padding: 9px 10px; border: 1px solid rgba(127,216,255,0.5); border-radius: 8px; background: rgba(12,46,66,0.9); color: #bcecff; font-weight: 800; cursor: pointer; }
+      .quest-dir-button:hover { background: rgba(18,72,102,0.96); }
+      .quest-dir-button.selected { border-color: rgba(255,226,122,0.9); background: rgba(90,57,18,0.94); color: #ffe27a; }
+      .quest-cell { position: relative; aspect-ratio: 1; border-radius: 6px; border: 1px solid rgba(127,216,255,0.25); background: rgba(21,54,72,0.88); overflow: hidden; }
+      .quest-cell.goal { box-shadow: inset 0 0 0 2px rgba(255,226,122,0.95); }
+      .quest-cell.player::after { content: ""; position: absolute; inset: 24%; border-radius: 50%; background: #7fd8ff; box-shadow: 0 0 12px #7fd8ff; }
+      .quest-cell.danger::before { content: ""; position: absolute; left: 50%; top: 50%; width: 58%; height: 58%; transform: translate(-50%,-50%) scale(var(--danger-scale, 0.4)); border-radius: 50%; background: rgba(0,0,0,0.42); border: 1px solid rgba(255,226,122,0.72); }
+      .quest-cell.explode { background: radial-gradient(circle, rgba(255,210,90,0.95), rgba(180,45,20,0.78) 58%, rgba(21,54,72,0.88) 62%); }
+      #questQuestion { margin-bottom: 10px; font-weight: 700; color: #fff; line-height: 1.35; }
+      #questAnswers { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
+      #questAnswers button { padding: 9px 10px; border: 1px solid rgba(255,226,122,0.72); border-radius: 8px; background: rgba(70,42,15,0.88); color: #ffe27a; font-weight: 700; cursor: pointer; }
+      #questAnswers button:hover { background: rgba(105,63,20,0.95); }
 
       #loader { position: fixed; inset: 0; z-index: 50; display: flex; flex-direction: column; align-items: center; justify-content: center; background: radial-gradient(circle at 50% 30%, #1a5276, #04121c); transition: opacity 0.6s ease; }
       #loader.hidden { opacity: 0; pointer-events: none; }
@@ -48,6 +146,14 @@
       @keyframes spin { to { transform: rotate(360deg); } }
       #err { position: fixed; inset: 0; z-index: 70; display: none; align-items: center; justify-content: center; padding: 30px; text-align: center; background: #04121c; }
       #err pre { color: #ff9a9a; font-size: 0.8rem; margin-top: 12px; text-align: left; max-width: 720px; overflow: auto; }
+      @media (max-width: 760px) {
+        #boot { padding: 12px; place-items: start center; overflow: auto; }
+        #boot .boot-box { grid-template-columns: 1fr; width: 100%; max-height: none; }
+        .learning-menu { grid-column: auto; grid-row: auto; }
+        .learning-head, .learning-controls { grid-template-columns: 1fr; flex-direction: column; }
+        .slot-grid { grid-template-columns: 1fr; max-height: 180px; overflow-y: auto; }
+        .action-quiz-options { grid-template-columns: 1fr; }
+      }
     </style>
 
     <script type="importmap">
@@ -64,17 +170,35 @@
 
     <div id="flash"></div>
 
+    <div id="boot">
+      <div class="boot-box panel">
+        <div class="boot-copy">
+          <h1>Морской бой</h1>
+          <p>Перед боем выбери учебный режим, уровень и темы. После нажатия старта игра заранее подготовит 15 заданий, а дальше каждое действие у пушки или пробоины будет проходить через короткий ответ.</p>
+        </div>
+        <button id="start" class="primary" type="button">Начать игру</button>
+      </div>
+    </div>
+
     <div id="topleft" class="panel">
       <div id="score">Потоплено: 0</div>
       <div id="enemies">Врагов на воде: 0</div>
-      <div><b>Прочность корпуса</b></div>
-      <div class="bar"><div id="integrityBar" style="background:#4fd07a"></div></div>
+      <div id="treasures">Сокровища: 0</div>
+      <div><b id="floodLabel">Вода в трюме: 0% · пробоин: 0</b></div>
+      <div class="bar"><div id="integrityBar" style="background:#4aa9d9; width:0"></div></div>
     </div>
 
     <div id="topright" class="panel">
       <div><b>Ветер</b></div>
       <div id="windArrow">▲</div>
       <div id="windText">0 м/с</div>
+      <div id="speedText">0 м/с · паруса 0%</div>
+    </div>
+
+    <div id="compass" class="panel">
+      <div><b>Компас крепости</b></div>
+      <div id="compassArrow">▲</div>
+      <div id="compassText">Поиск острова…</div>
     </div>
 
     <div id="crosshair"></div>
@@ -85,17 +209,48 @@
     </div>
 
     <div id="prompt"></div>
+    <button id="fireButton" type="button">Выстрелить [ЛКМ]</button>
+    <button id="dumpButton" type="button">Вылить воду [E]</button>
+    <button id="takePlankButton" class="deckActionButton" type="button">Взять доску [F]</button>
+    <button id="scoopWaterButton" class="deckActionButton" type="button">Зачерпнуть воду [E]</button>
+    <button id="patchBreachButton" class="deckActionButton" type="button">Заколотить дыру [F]</button>
+    <button id="jumpButton" type="button">Прыжок [Пробел]</button>
+    <button id="islandTeleportButton" type="button">Телепорт на остров</button>
+    <button id="audioGuideButton" type="button" aria-pressed="true">Голос: вкл</button>
     <div id="msg"></div>
 
     <div id="hint" class="panel">
       <div><b>WASD</b> — ходить по палубе · мышь — обзор и наводка</div>
-      <div><b>ЛКМ / Space</b> — выстрел из пушки</div>
-      <div>Жёлтая дуга показывает, куда упадёт ядро.</div>
+      <div><b>ЛКМ / экранная кнопка</b> — выстрел из ближайшей пушки</div>
+      <div><b>E у штурвала</b> — управление кораблём · <b>W/S</b> — паруса · <b>A/D</b> — курс</div>
+      <div><b>Пробел / кнопка прыжка</b> — перепрыгнуть на верхнюю палубу с лестницы</div>
+      <div><b>E у дверей</b> — открыть трюм, затем спуститься ногами · <b>E на floor-8 в трюме</b> — взять доску, залатать пробоину или зачерпнуть воду</div>
+      <div><b>E / синяя кнопка у борта</b> — вылить полное ведро за борт</div>
+      <div>Подойди к орудию и наведи его мышью в пределах доступного сектора.</div>
+      <div>Жёлтая дуга показывается только рядом с выбранной пушкой.</div>
       <div>Подведи кольцо к вражескому кораблю и стреляй.</div>
       <div>Клик по экрану — захватить мышь.</div>
     </div>
 
     <a id="back" href="/">← Домой</a>
+    <a id="sandboxLink" href="/collision-sandbox.html">Песочница коллизий</a>
+    <a id="islandSandboxLink" href="/island-sandbox.html">Остров: объекты</a>
+
+    <div id="bonusChoice">
+      <div class="bonus-box panel">
+        <h2>Выбери трофейный бонус</h2>
+        <p>Из сундука выпало три варианта. Один забираем сразу, остальные уходят в море.</p>
+        <div id="bonusCards"></div>
+      </div>
+    </div>
+
+    <div id="questPanel" class="panel">
+      <h3>Испытание статуи</h3>
+      <div id="questStatus"></div>
+      <div id="questGrid"></div>
+      <div id="questQuestion"></div>
+      <div id="questAnswers"></div>
+    </div>
 
     <div id="gameover">
       <h1>Корабль потоплен</h1>
@@ -105,38 +260,88 @@
     <div id="loader"><div class="spinner"></div><div>Загрузка моря…</div></div>
     <div id="err"><div><h2 style="color:#ff8080">Не удалось запустить</h2><pre id="errmsg"></pre></div></div>
 
+    <script src="./js/learning.js?v=20260615-audio-replay-v1"></script>
     <script type="module">
-      import { startGame } from "./js/game.js";
+    import { startGame } from "./js/game.js?v=20260615-once-hints-v1";
 
       const $ = (id) => document.getElementById(id);
       const loaderEl = $("loader");
+      const bootEl = $("boot");
+      const startButton = $("start");
+      let startBusy = false;
+      loaderEl.style.display = "none";
 
       const hud = {
         score: $("score"),
         enemies: $("enemies"),
+        treasures: $("treasures"),
         integrityBar: $("integrityBar"),
+        floodLabel: $("floodLabel"),
         windArrow: $("windArrow"),
         windText: $("windText"),
+        speedText: $("speedText"),
+        compassArrow: $("compassArrow"),
+        compassText: $("compassText"),
         crosshair: $("crosshair"),
         reloadWrap: $("reloadWrap"),
         reloadBar: $("reloadBar"),
+        fireButton: $("fireButton"),
+        dumpButton: $("dumpButton"),
+        jumpButton: $("jumpButton"),
+        takePlankButton: $("takePlankButton"),
+        scoopWaterButton: $("scoopWaterButton"),
+        patchBreachButton: $("patchBreachButton"),
+        islandTeleportButton: $("islandTeleportButton"),
+        audioGuideButton: $("audioGuideButton"),
         prompt: $("prompt"),
         msg: $("msg"),
         flash: $("flash"),
         gameover: $("gameover"),
+        bonusChoice: $("bonusChoice"),
+        bonusCards: $("bonusCards"),
+        questPanel: $("questPanel"),
+        questGrid: $("questGrid"),
+        questQuestion: $("questQuestion"),
+        questAnswers: $("questAnswers"),
+        questStatus: $("questStatus"),
       };
 
-      startGame($("app"), hud)
-        .then(() => {
+      const holdHint = document.querySelector("#hint div:nth-child(5)");
+      if (holdHint) {
+        holdHint.innerHTML = "<b>Трюм открыт</b> - заходи по внутренним лестницам или сбоку люка · <b>E</b> - ведро и вода · <b>F</b> - доска и ремонт пробоин";
+      }
+
+      function setStartBusy(busy) {
+        startBusy = busy;
+        startButton.disabled = busy;
+        startButton.textContent = busy ? "Готовлю 15 заданий..." : "Начать игру";
+      }
+
+      startButton.addEventListener("click", async () => {
+        if (startBusy) return;
+        setStartBusy(true);
+        loaderEl.style.display = "flex";
+        loaderEl.classList.remove("hidden");
+        try {
+          await window.prepareMostyQuiz?.({ floors: 15, startFloor: 1 });
+        } catch (error) {
+          console.warn("Question prefetch failed, fallback questions will be used:", error);
+        }
+        bootEl.hidden = true;
+        try {
+          await startGame($("app"), hud);
           loaderEl.classList.add("hidden");
           setTimeout(() => (loaderEl.style.display = "none"), 700);
-        })
-        .catch((e) => {
+        } catch (e) {
           console.error(e);
           loaderEl.style.display = "none";
           $("err").style.display = "flex";
           $("errmsg").textContent = (e && e.stack) || String(e);
-        });
+          bootEl.hidden = false;
+        } finally {
+          setStartBusy(false);
+        }
+      });
     </script>
   </body>
 </html>
