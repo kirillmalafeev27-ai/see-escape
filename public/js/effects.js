@@ -120,15 +120,17 @@ class ParticlePool {
 }
 
 export class EffectsSystem {
-  constructor(scene, sampleWaveHeight) {
+  constructor(scene, sampleWaveHeight, { effectScale = 1 } = {}) {
     this.scene = scene;
     this.sampleWaveHeight = sampleWaveHeight;
-    this.splinters = new ParticlePool(scene, 1200, { size: 1.4, gravity: -28, drag: 1.6 });
-    this.dust = new ParticlePool(scene, 800, { size: 6.0, gravity: -2, drag: 2.2 });
-    this.splash = new ParticlePool(scene, 1000, { size: 3.0, gravity: -34, drag: 1.0 });
-    this.flow = new ParticlePool(scene, 2200, { size: 3.6, gravity: -22, drag: 0.35 });
-    this.floodMist = new ParticlePool(scene, 700, { size: 1.15, gravity: -2.2, drag: 2.4 });
-    this.glow = new ParticlePool(scene, 600, { size: 5.0, gravity: -4, drag: 2.0, blending: THREE.AdditiveBlending });
+    this.effectScale = THREE.MathUtils.clamp(effectScale, 0.35, 1);
+    const poolSize = (value, min = 96) => Math.max(min, Math.round(value * this.effectScale));
+    this.splinters = new ParticlePool(scene, poolSize(1200), { size: 1.4, gravity: -28, drag: 1.6 });
+    this.dust = new ParticlePool(scene, poolSize(800), { size: 6.0, gravity: -2, drag: 2.2 });
+    this.splash = new ParticlePool(scene, poolSize(1000), { size: 3.0, gravity: -34, drag: 1.0 });
+    this.flow = new ParticlePool(scene, poolSize(2200, 256), { size: 3.6, gravity: -22, drag: 0.35 });
+    this.floodMist = new ParticlePool(scene, poolSize(700), { size: 1.15, gravity: -2.2, drag: 2.4 });
+    this.glow = new ParticlePool(scene, poolSize(600), { size: 5.0, gravity: -4, drag: 2.0, blending: THREE.AdditiveBlending });
 
     // Wood debris chunks (splinter-shaped boxes) with simple ballistics.
     this.debris = [];
@@ -139,7 +141,11 @@ export class EffectsSystem {
       roughness: 0.9,
       metalness: 0.0,
     });
-    this.maxDebris = 180;
+    this.maxDebris = Math.max(60, Math.round(180 * this.effectScale));
+  }
+
+  _count(value) {
+    return Math.max(1, Math.round(value * this.effectScale));
   }
 
   _getPlank() {
@@ -155,7 +161,7 @@ export class EffectsSystem {
   // Cannonball-into-wood hit. point/normal in world space; strength scales it.
   woodImpact(point, normal, strength = 1) {
     const n = normal.clone().normalize();
-    this.splinters.emit(point, Math.round(40 * strength), {
+    this.splinters.emit(point, this._count(40 * strength), {
       baseDir: n,
       spread: 1.3,
       speedMin: 10,
@@ -165,7 +171,7 @@ export class EffectsSystem {
       color: [0.45, 0.3, 0.17],
       up: 6,
     });
-    this.dust.emit(point, Math.round(22 * strength), {
+    this.dust.emit(point, this._count(22 * strength), {
       baseDir: n,
       spread: 1.6,
       speedMin: 2,
@@ -176,7 +182,7 @@ export class EffectsSystem {
       up: 3,
     });
 
-    const chunks = Math.min(Math.round(10 * strength), this.maxDebris - this.debris.length);
+    const chunks = Math.min(this._count(10 * strength), this.maxDebris - this.debris.length);
     for (let i = 0; i < chunks; i++) {
       const m = this._getPlank();
       const len = 1.5 + Math.random() * 3.5;
@@ -204,7 +210,7 @@ export class EffectsSystem {
   }
 
   waterSplash(point, strength = 1) {
-    this.splash.emit(point, Math.round(46 * strength), {
+    this.splash.emit(point, this._count(46 * strength), {
       baseDir: new THREE.Vector3(0, 1, 0),
       spread: 0.9,
       speedMin: 12,
@@ -214,7 +220,7 @@ export class EffectsSystem {
       color: [0.82, 0.9, 0.95],
       up: 8,
     });
-    this.dust.emit(point, 14, {
+    this.dust.emit(point, this._count(14), {
       baseDir: new THREE.Vector3(0, 1, 0),
       spread: 1.4,
       speedMin: 2,
@@ -227,7 +233,7 @@ export class EffectsSystem {
   }
 
   waterFlow(point, direction, strength = 1) {
-    this.flow.emit(point, Math.max(1, Math.round(4 * strength)), {
+    this.flow.emit(point, this._count(4 * strength), {
       baseDir: direction,
       spread: 0.32,
       speedMin: 5,
@@ -241,7 +247,7 @@ export class EffectsSystem {
   }
 
   calmFlood(point, strength = 1) {
-    this.floodMist.emit(point, 1, {
+    this.floodMist.emit(point, this._count(1), {
       baseDir: new THREE.Vector3(0, 1, 0),
       spread: 0.12,
       speedMin: 0.12,
@@ -256,7 +262,7 @@ export class EffectsSystem {
 
   fireAt(point, strength = 1) {
     const up = new THREE.Vector3(0, 1, 0);
-    const glowCount = Math.max(2, Math.round(8 * strength));
+    const glowCount = Math.max(2, this._count(8 * strength));
     this.glow.emit(point, glowCount, {
       baseDir: up,
       spread: 0.62,
@@ -268,7 +274,7 @@ export class EffectsSystem {
       colorJitter: 0.16,
       up: 3.5,
     });
-    this.dust.emit(point, Math.max(1, Math.round(3 * strength)), {
+    this.dust.emit(point, this._count(3 * strength), {
       baseDir: up,
       spread: 0.85,
       speedMin: 1.5,
@@ -283,7 +289,7 @@ export class EffectsSystem {
 
   muzzleFlash(point, dir) {
     const d = dir.clone().normalize();
-    this.glow.emit(point, 26, {
+    this.glow.emit(point, this._count(26), {
       baseDir: d,
       spread: 0.6,
       speedMin: 18,
@@ -292,7 +298,7 @@ export class EffectsSystem {
       lifeMax: 0.3,
       color: [1.0, 0.8, 0.4],
     });
-    this.dust.emit(point, 18, {
+    this.dust.emit(point, this._count(18), {
       baseDir: d,
       spread: 0.9,
       speedMin: 6,

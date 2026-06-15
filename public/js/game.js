@@ -2,29 +2,35 @@
 // the waves), the player's aimable cannons, an AI enemy fleet trading
 // realistic cannonball fire, wood-debris impacts, and the HUD/main loop.
 import * as THREE from "three";
-import { createWorld } from "./ocean.js?v=20260615-render-perf-v1";
-import { EffectsSystem } from "./effects.js?v=20260614-flood-visuals-v5";
+import { createWorld } from "./ocean.js?v=20260615-mac-perf-v1";
+import { EffectsSystem } from "./effects.js?v=20260615-mac-perf-v1";
 import { ProjectileSystem } from "./ballistics.js?v=20260603-bonuses-island-v1";
 import { buildPlayerShip, SHIP_DEFAULTS } from "./ship.js?v=20260614-buoyancy-v2";
-import { EnemyFleet } from "./enemy.js?v=20260615-learning-fire-v1";
-import { PlayerController } from "./player.js?v=20260615-manual-fire-v1";
+import { EnemyFleet } from "./enemy.js?v=20260615-slower-enemy-fire-v1";
+import { PlayerController } from "./player.js?v=20260615-cursor-modes-v1";
 import { DamageControlSystem } from "./damage-control.js?v=20260614-hold-water-v2";
 import { loadAndAnalyzeShip } from "./models.js?v=20260607-assets-fire-v1";
 import { applyCollisionProfile, loadAppliedCollisionProfile } from "./collision-profile.js?v=20260609-remove-hold-helpers-v1";
 import { SailingSystem } from "./sailing.js?v=20260603-bonuses-island-v1";
 import { TreasureSystem } from "./treasure.js?v=20260603-bonuses-island-v1";
 import { IslandFortress } from "./island.js?v=20260615-lazy-island-v1";
-import { BonusSystem } from "./bonuses.js?v=20260611-audio-guide-v1";
+import { BonusSystem } from "./bonuses.js?v=20260615-clickable-bonuses-v1";
 import { IslandQuestSystem } from "./island-quest.js?v=20260611-audio-guide-v1";
 import { applyCannonLayout, loadCannonLayout } from "./cannon-layout.js?v=20260609-default-profile-v2";
 import { AudioGuide } from "./audio-guide.js?v=20260615-once-hints-v1";
-import { ActionQuizGate } from "./action-quiz.js?v=20260615-render-one-topic-v1";
+import { ActionQuizGate } from "./action-quiz.js?v=20260615-clickable-quiz-v1";
 
 export async function startGame(container, hud) {
   const world = createWorld(container);
   const { scene, camera, renderer, sampleWaveHeight, advanceTime } = world;
   const audioGuide = new AudioGuide({ button: hud.audioGuideButton });
-  const actionQuiz = new ActionQuizGate({ audioGuide });
+  let player = null;
+  const actionQuiz = new ActionQuizGate({
+    audioGuide,
+    onActiveChange: (active) => {
+      if (active) player?.enterCursorMode?.();
+    },
+  });
   audioGuide.introduce([
     "Ты капитан боевого корабля. Главная цель: выжить, топить врагов, идти по компасу к крепости и забрать островное сокровище.",
     "Ходи по палубе клавишами W A S D. Клик по экрану захватывает мышь для обзора и наведения.",
@@ -69,7 +75,9 @@ export async function startGame(container, hud) {
     ship.hidePrimitives();
   }
 
-  const effects = new EffectsSystem(scene, sampleWaveHeight);
+  const effects = new EffectsSystem(scene, sampleWaveHeight, {
+    effectScale: world.performanceProfile?.effectScale ?? 1,
+  });
   const projectiles = new ProjectileSystem(scene);
   const damageControl = new DamageControlSystem({
     scene,
@@ -188,7 +196,7 @@ export async function startGame(container, hud) {
       console.warn("Enemy ship model failed, using primitives:", e);
     });
 
-  const player = new PlayerController({
+  player = new PlayerController({
     scene,
     camera,
     ship,
@@ -386,6 +394,7 @@ export async function startGame(container, hud) {
   function frame() {
     requestAnimationFrame(frame);
     const dt = Math.min(clock.getDelta(), 0.05);
+    world.tuneForFrameTime?.(dt);
     const playerInsideHold = damageControl.isInsideHold?.(player.rig.position) || false;
     damageControl.updateInteriorVisibility(player.rig.position);
     if (state.over) {
@@ -460,8 +469,9 @@ export async function startGame(container, hud) {
   function updateHud(dt) {
     const ps = player.getState();
     const dc = damageControl.getState();
+    const uiCursorActive = actionQuiz.active || Boolean(bonusSystem?.active) || islandQuest.active || player.questMode;
     hud.prompt.textContent = ps.prompt || "";
-    hud.crosshair.style.display = "block";
+    hud.crosshair.style.display = uiCursorActive ? "none" : "block";
     hud.reloadWrap.style.display = ps.nearCannon ? "block" : "none";
     hud.reloadBar.style.width = `${Math.round(ps.reload * 100)}%`;
     hud.fireButton.style.display = ps.nearCannon ? "block" : "none";

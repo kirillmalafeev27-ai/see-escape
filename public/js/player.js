@@ -122,6 +122,7 @@ export class PlayerController {
     this.handCannonCharges = 0;
     this.quizActionPending = false;
     this.fireQuizGrant = null;
+    this.cursorMode = "camera";
 
     this._ray = new THREE.Raycaster();
     this._origin = new THREE.Vector3();
@@ -162,6 +163,35 @@ export class PlayerController {
     this._rememberSafePosition();
   }
 
+  enterCursorMode() {
+    this.cursorMode = "ui";
+    this.dragLook = false;
+    document.body?.classList.add("cursor-mode");
+    document.body?.classList.remove("camera-mode");
+    if (document.pointerLockElement === this.dom) document.exitPointerLock?.();
+  }
+
+  enterCameraMode() {
+    this.cursorMode = "camera";
+    document.body?.classList.add("camera-mode");
+    document.body?.classList.remove("cursor-mode");
+    if (this.questMode || this.islandQuest?.active || this.quizActionPending) return;
+    if (document.pointerLockElement !== this.dom) {
+      try {
+        const lock = this.dom.requestPointerLock?.();
+        lock?.catch?.(() => {});
+      } catch (_) {
+        // Some browsers require direct user activation; the next canvas click will lock.
+      }
+    }
+  }
+
+  _hasGrantedFireFromUnlockedClick() {
+    const cannon = this._findNearbyCannon();
+    if (cannon) return this._hasFireQuizGrant("deck-cannon", cannon);
+    return this.handCannonCharges > 0 && this._hasFireQuizGrant("hand-cannon");
+  }
+
   _bindInput() {
     addEventListener("keydown", (e) => {
       this.keys[e.code] = true;
@@ -191,13 +221,22 @@ export class PlayerController {
     addEventListener("keyup", (e) => (this.keys[e.code] = false));
 
     this.dom.addEventListener("mousedown", (e) => {
+      if (this.quizActionPending) {
+        this.enterCursorMode();
+        e.preventDefault();
+        return;
+      }
       if (this.questMode || this.islandQuest?.active) {
-        if (document.pointerLockElement === this.dom) document.exitPointerLock?.();
+        this.enterCursorMode();
         this.dragLook = e.button === 0;
         return;
       }
       if (document.pointerLockElement !== this.dom) {
-        this.dom.requestPointerLock();
+        if (e.button === 0 && this._hasGrantedFireFromUnlockedClick()) {
+          this._fire();
+        } else {
+          this.enterCameraMode();
+        }
       } else if (e.button === 0) {
         this._fire();
       }
@@ -205,39 +244,50 @@ export class PlayerController {
     addEventListener("mouseup", () => {
       this.dragLook = false;
     });
-    this.fireButton?.addEventListener("pointerdown", (e) => e.stopPropagation());
+    const stopUiPointer = (e) => {
+      e.stopPropagation();
+      this.enterCursorMode();
+    };
+    this.fireButton?.addEventListener("pointerdown", stopUiPointer);
     this.fireButton?.addEventListener("click", (e) => {
+      e.preventDefault();
       e.stopPropagation();
       this._fire();
     });
-    this.dumpButton?.addEventListener("pointerdown", (e) => e.stopPropagation());
+    this.dumpButton?.addEventListener("pointerdown", stopUiPointer);
     this.dumpButton?.addEventListener("click", (e) => {
+      e.preventDefault();
       e.stopPropagation();
       this._dumpBucket();
     });
-    this.takePlankButton?.addEventListener("pointerdown", (e) => e.stopPropagation());
+    this.takePlankButton?.addEventListener("pointerdown", stopUiPointer);
     this.takePlankButton?.addEventListener("click", (e) => {
+      e.preventDefault();
       e.stopPropagation();
       this._takePlank();
     });
-    this.scoopWaterButton?.addEventListener("pointerdown", (e) => e.stopPropagation());
+    this.scoopWaterButton?.addEventListener("pointerdown", stopUiPointer);
     this.scoopWaterButton?.addEventListener("click", (e) => {
+      e.preventDefault();
       e.stopPropagation();
       this._scoopWater();
     });
-    this.patchBreachButton?.addEventListener("pointerdown", (e) => e.stopPropagation());
+    this.patchBreachButton?.addEventListener("pointerdown", stopUiPointer);
     this.patchBreachButton?.addEventListener("click", (e) => {
+      e.preventDefault();
       e.stopPropagation();
       this._secondaryInteract();
     });
-    this.islandTeleportButton?.addEventListener("pointerdown", (e) => e.stopPropagation());
+    this.islandTeleportButton?.addEventListener("pointerdown", stopUiPointer);
     this.islandTeleportButton?.addEventListener("click", (e) => {
+      e.preventDefault();
       e.stopPropagation();
       this.islandQuest?.forceStart();
     });
     this.jumpButton?.addEventListener("pointerdown", (e) => {
       e.preventDefault();
       e.stopPropagation();
+      this.enterCursorMode();
     });
     this.jumpButton?.addEventListener("click", (e) => {
       e.preventDefault();
@@ -247,6 +297,11 @@ export class PlayerController {
     this.dom.addEventListener("contextmenu", (e) => e.preventDefault());
     document.addEventListener("pointerlockchange", () => {
       this.locked = document.pointerLockElement === this.dom;
+      if (this.locked) {
+        this.cursorMode = "camera";
+        document.body?.classList.add("camera-mode");
+        document.body?.classList.remove("cursor-mode");
+      }
     });
     addEventListener("mousemove", (e) => {
       const freeIslandLook = (this.dragLook || Boolean(e.buttons & 1)) && (this.questMode || this.islandQuest?.active);
@@ -326,8 +381,7 @@ export class PlayerController {
     if (this.questMode) {
       this.sailing?.setAnchored(true);
       this.handCannon.visible = false;
-      this.dragLook = false;
-      if (document.pointerLockElement === this.dom) document.exitPointerLock?.();
+      this.enterCursorMode();
     } else if (this.handCannon) {
       this.handCannon.visible = this.handCannonCharges > 0;
     }
@@ -393,6 +447,7 @@ export class PlayerController {
       return false;
     }
     this.quizActionPending = true;
+    this.enterCursorMode();
     try {
       return Boolean(await this.requestActionQuiz(action, context));
     } catch (error) {
@@ -437,6 +492,7 @@ export class PlayerController {
         if (clearance !== "ready") return;
         this._consumeFireQuizGrant("hand-cannon");
         this._fireHandCannon();
+        this.enterCameraMode();
         return;
       }
       this.onMessage("Подойди к пушке, чтобы выстрелить.");
@@ -471,6 +527,7 @@ export class PlayerController {
       this.effects.muzzleFlash(origin, vel);
       this.onMessage("Выстрел из пушки. Смотри, куда падает ядро, и дождись перезарядки.");
     }
+    this.enterCameraMode();
   }
 
   _fireGrapeshot(origin, dir) {
@@ -917,7 +974,7 @@ export class PlayerController {
       if (cannon.reload > 0) cannon.reload -= dt;
     }
     if (this.questMode || this.islandQuest?.active) {
-      if (document.pointerLockElement === this.dom) document.exitPointerLock?.();
+      this.enterCursorMode();
       this.activeCannon = null;
       this.aimInTraverse = false;
       this.prompt = this.islandQuest.getPrompt(this.rig);

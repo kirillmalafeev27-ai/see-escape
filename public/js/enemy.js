@@ -21,12 +21,17 @@ const QUIZ_RELOAD_MIN = 20;
 const QUIZ_RELOAD_MAX = 32;
 const LEARNING_RELOAD_MIN = 22;
 const LEARNING_RELOAD_MAX = 36;
+const ENEMY_FIRE_INTERVAL_MULTIPLIER = 1.15;
 const BUOYANCY_RESPONSE = 3.5;
 const HULL_BULWARK = 5;
 const SAIL_BASE_CLEARANCE = 4;
 
 function mat(c, r = 0.85, m = 0) {
   return new THREE.MeshStandardMaterial({ color: c, roughness: r, metalness: m });
+}
+
+function reloadDelay(min, max) {
+  return (min + Math.random() * (max - min)) * ENEMY_FIRE_INTERVAL_MULTIPLIER;
 }
 
 function buildEnemyShip(d, factory) {
@@ -99,7 +104,7 @@ export class EnemyFleet {
     this.list.push({
       group: built.group,
       muzzles: built.muzzles,
-      reload: INITIAL_RELOAD_MIN + Math.random() * (INITIAL_RELOAD_MAX - INITIAL_RELOAD_MIN),
+      reload: reloadDelay(INITIAL_RELOAD_MIN, INITIAL_RELOAD_MAX),
       health: 100,
       sinking: false,
       sinkVel: 0,
@@ -261,13 +266,13 @@ export class EnemyFleet {
       const fireRange = this.quizMode ? 900 : 760;
       if (e.reload <= 0 && dist < fireRange) {
         if (this.quizMode) {
-          e.reload = QUIZ_RELOAD_MIN + Math.random() * (QUIZ_RELOAD_MAX - QUIZ_RELOAD_MIN);
+          e.reload = reloadDelay(QUIZ_RELOAD_MIN, QUIZ_RELOAD_MAX);
         } else if (this.learningFireMode) {
           this._fire(e);
-          e.reload = LEARNING_RELOAD_MIN + Math.random() * (LEARNING_RELOAD_MAX - LEARNING_RELOAD_MIN);
+          e.reload = reloadDelay(LEARNING_RELOAD_MIN, LEARNING_RELOAD_MAX);
         } else {
           this._fire(e);
-          e.reload = COMBAT_RELOAD_MIN + Math.random() * (COMBAT_RELOAD_MAX - COMBAT_RELOAD_MIN);
+          e.reload = reloadDelay(COMBAT_RELOAD_MIN, COMBAT_RELOAD_MAX);
         }
       }
     }

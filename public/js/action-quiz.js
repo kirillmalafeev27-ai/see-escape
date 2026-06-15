@@ -24,6 +24,22 @@ function actionFailure(action) {
   return "Неверно.";
 }
 
+function normalizeQuestion(question) {
+  if (!question) return null;
+  const choices = Array.isArray(question.choices)
+    ? question.choices
+    : Array.isArray(question.options)
+    ? question.options
+    : [];
+  const correctIndex = Number.isInteger(question.correctIndex)
+    ? question.correctIndex
+    : Number.isInteger(question.correct)
+    ? question.correct
+    : choices.indexOf(question.correct);
+  if (!choices.length || correctIndex < 0 || correctIndex >= choices.length) return null;
+  return { ...question, choices, correctIndex };
+}
+
 export class ActionQuizGate {
   constructor({ audioGuide = null, onActiveChange = null } = {}) {
     this.audioGuide = audioGuide;
@@ -60,7 +76,7 @@ export class ActionQuizGate {
     const floor = ++this.questionCounter;
     const quizContext = { floor, ...context };
     await window.quizEnsureQuestionAvailable?.(quizContext);
-    const question = window.pickQuestion?.("mix", quizContext);
+    const question = normalizeQuestion(window.pickQuestion?.("mix", quizContext));
     if (!question) return false;
 
     this.active = true;
@@ -102,8 +118,18 @@ export class ActionQuizGate {
     `;
     this.panel.hidden = false;
     this.panel.querySelectorAll("[data-answer]").forEach((button) => {
-      button.addEventListener("click", () => this._answer(Number(button.dataset.answer)));
+      let submitted = false;
+      const submit = (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (submitted || button.disabled) return;
+        submitted = true;
+        this._answer(Number(button.dataset.answer));
+      };
+      button.addEventListener("pointerdown", submit);
+      button.addEventListener("click", submit);
     });
+    this.panel.querySelector("[data-answer]")?.focus({ preventScroll: true });
   }
 
   _answer(index) {

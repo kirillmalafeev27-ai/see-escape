@@ -70,7 +70,12 @@ export class BonusSystem {
       button.type = "button";
       button.className = "bonus-card";
       button.innerHTML = `<b>${bonus.title}</b><span>${bonus.description}</span>`;
-      button.addEventListener("click", () => this.apply(bonus.id));
+      button.addEventListener("pointerdown", (event) => event.stopPropagation());
+      button.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        this.apply(bonus.id);
+      });
       this.hud.bonusCards.appendChild(button);
     }
     this.hud.bonusChoice.style.display = "flex";
@@ -78,7 +83,7 @@ export class BonusSystem {
       .map((bonus, index) => `${index + 1}: ${bonus.title}. ${bonus.description}`)
       .join(" ");
     this.onMessage(`Выбери один трофейный бонус. ${options}`);
-    document.exitPointerLock?.();
+    this.systems.player?.enterCursorMode?.();
   }
 
   apply(id) {

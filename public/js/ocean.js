@@ -13,15 +13,52 @@ export const WAVES = [
   { dir: [-1.0, -0.5], steep: 0.22, len: 180, speed: 1.45 },
 ];
 
+function createPerformanceProfile() {
+  const nav = typeof navigator !== "undefined" ? navigator : {};
+  const ua = nav.userAgent || "";
+  const platform = nav.platform || "";
+  const isMac = /Macintosh|MacIntel|Mac OS X/i.test(`${ua} ${platform}`);
+  const cores = Number(nav.hardwareConcurrency) || 4;
+  const memory = Number(nav.deviceMemory) || 4;
+  const reducedMotion =
+    typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const lowPower = isMac || cores <= 4 || memory <= 4 || reducedMotion;
+
+  return lowPower
+    ? {
+        name: "low",
+        pixelRatioMax: 1,
+        pixelRatioFloor: 0.75,
+        waterSegments: 144,
+        waterTextureSize: 256,
+        effectScale: 0.56,
+        adaptive: true,
+      }
+    : {
+        name: "standard",
+        pixelRatioMax: 1.35,
+        pixelRatioFloor: 1,
+        waterSegments: 220,
+        waterTextureSize: 512,
+        effectScale: 1,
+        adaptive: true,
+      };
+}
+
 export function createWorld(container) {
+  const performanceProfile = createPerformanceProfile();
   const renderer = new THREE.WebGLRenderer({
     antialias: false,
     powerPreference: "high-performance",
   });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.35));
+  let currentPixelRatio = Math.min(window.devicePixelRatio || 1, performanceProfile.pixelRatioMax);
+  let frameStressTime = 0;
+  let frameCoolTime = 0;
+  renderer.setPixelRatio(currentPixelRatio);
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 0.55;
+  renderer.domElement.dataset.performanceProfile = performanceProfile.name;
   container.appendChild(renderer.domElement);
 
   const scene = new THREE.Scene();
@@ -35,10 +72,15 @@ export function createWorld(container) {
   const sun = new THREE.Vector3();
 
   // ---- Water with real 3D Gerstner waves --------------------------------
-  const waterGeometry = new THREE.PlaneGeometry(10000, 10000, 240, 240);
+  const waterGeometry = new THREE.PlaneGeometry(
+    10000,
+    10000,
+    performanceProfile.waterSegments,
+    performanceProfile.waterSegments
+  );
   const water = new Water(waterGeometry, {
-    textureWidth: 512,
-    textureHeight: 512,
+    textureWidth: performanceProfile.waterTextureSize,
+    textureHeight: performanceProfile.waterTextureSize,
     waterNormals: new THREE.TextureLoader().load(
       "textures/waternormals.jpg",
       (t) => {
@@ -312,8 +354,42 @@ export function createWorld(container) {
   window.addEventListener("resize", () => {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
+    renderer.setPixelRatio(currentPixelRatio);
     renderer.setSize(window.innerWidth, window.innerHeight);
   });
+
+  function applyPixelRatio(value) {
+    const next = THREE.MathUtils.clamp(
+      value,
+      performanceProfile.pixelRatioFloor,
+      performanceProfile.pixelRatioMax
+    );
+    if (Math.abs(next - currentPixelRatio) < 0.025) return;
+    currentPixelRatio = next;
+    renderer.setPixelRatio(currentPixelRatio);
+    renderer.setSize(window.innerWidth, window.innerHeight, false);
+  }
+
+  function tuneForFrameTime(dt) {
+    if (!performanceProfile.adaptive) return;
+    if (dt > 1 / 28) {
+      frameStressTime += dt;
+      frameCoolTime = 0;
+    } else if (dt < 1 / 50) {
+      frameCoolTime += dt;
+      frameStressTime = Math.max(0, frameStressTime - dt);
+    } else {
+      frameStressTime = Math.max(0, frameStressTime - dt * 0.5);
+      frameCoolTime = Math.max(0, frameCoolTime - dt);
+    }
+    if (frameStressTime > 0.9) {
+      applyPixelRatio(currentPixelRatio - 0.12);
+      frameStressTime = 0;
+    } else if (frameCoolTime > 5 && currentPixelRatio < performanceProfile.pixelRatioMax) {
+      applyPixelRatio(currentPixelRatio + 0.06);
+      frameCoolTime = 0;
+    }
+  }
 
   function advanceTime(dt) {
     water.material.uniforms["time"].value += dt;
@@ -390,5 +466,7 @@ export function createWorld(container) {
     getWaveHeightMultiplier,
     setQuietZone,
     setHullWaterMask,
+    performanceProfile,
+    tuneForFrameTime,
   };
 }
