@@ -50,8 +50,9 @@ export class ActionQuizGate {
   }
 
   async prepare(count = 15) {
-    if (typeof window.prepareMostyQuiz !== "function") return { ok: true, generated: false };
-    return window.prepareMostyQuiz({ floors: count, startFloor: 1 });
+    const prepare = window.prepareSeaQuiz || window.prepareMostyQuiz;
+    if (typeof prepare !== "function") return { ok: true, generated: false };
+    return prepare({ floors: count, startFloor: 1 });
   }
 
   async request(action, context = {}) {

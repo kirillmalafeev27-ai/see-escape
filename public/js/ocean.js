@@ -14,8 +14,11 @@ export const WAVES = [
 ];
 
 export function createWorld(container) {
-  const renderer = new THREE.WebGLRenderer({ antialias: true });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  const renderer = new THREE.WebGLRenderer({
+    antialias: false,
+    powerPreference: "high-performance",
+  });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.35));
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 0.55;
@@ -32,7 +35,7 @@ export function createWorld(container) {
   const sun = new THREE.Vector3();
 
   // ---- Water with real 3D Gerstner waves --------------------------------
-  const waterGeometry = new THREE.PlaneGeometry(10000, 10000, 360, 360);
+  const waterGeometry = new THREE.PlaneGeometry(10000, 10000, 240, 240);
   const water = new Water(waterGeometry, {
     textureWidth: 512,
     textureHeight: 512,

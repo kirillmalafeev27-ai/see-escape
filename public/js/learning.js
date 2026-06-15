@@ -1,5 +1,4 @@
-// Quiz layer ported from Betrunken: generated German tasks, audio tasks,
-// configurable learning settings, plus the original Mosty question bank as fallback.
+// Quiz layer for See Escape: one German grammar topic feeds every gated action.
 (function () {
   const LEGACY_QUESTIONS = {
     geo: [
@@ -120,7 +119,9 @@
     { level: 'B2', topic: 'Audio', audioText: 'Je länger wir warten, desto schwieriger wird die Entscheidung.', options: ['Чем дольше мы ждем, тем труднее становится решение.', 'Чем дольше мы ждем, тем труднее становится обсуждение.', 'Чем дольше мы советуемся, тем труднее становится решение.', 'Чем дольше мы ждем, тем надежнее становится решение.'], correct: 0 },
   ];
 
-  const STORAGE_KEY = 'mosty.learning.v1';
+  const STORAGE_KEY = 'see-escape.learning.v2';
+  const LEGACY_STORAGE_KEY = 'mosty.learning.v1';
+  const DEFAULT_GRAMMAR_TOPIC = 'Präsens';
   const DEFAULT_SLOTS = ['Präsens', 'Akkusativ', 'Perfekt', 'Dativ', 'Wortstellung im Nebensatz'];
 
   function shuffle(items) {
@@ -172,6 +173,20 @@
       raw;
   }
 
+  function compactTopic(topic) {
+    return String(topic || '')
+      .replace(/ä/g, 'ae').replace(/ö/g, 'oe').replace(/ü/g, 'ue').replace(/ß/g, 'ss')
+      .replace(/Ä/g, 'Ae').replace(/Ö/g, 'Oe').replace(/Ü/g, 'Ue')
+      .replace(/[^a-z0-9]+/gi, '')
+      .toLowerCase();
+  }
+
+  function sameTopic(a, b) {
+    const left = compactTopic(a);
+    const right = compactTopic(b);
+    return left && right && (left === right || left.includes(right) || right.includes(left));
+  }
+
   function isWortstellungTopic(topic) {
     return /Wortstellung/i.test(topic || '');
   }
@@ -181,15 +196,20 @@
       mode: 'grammar',
       level: 'A2',
       lexicalTopic: 'Alltag',
+      grammarTopic: DEFAULT_GRAMMAR_TOPIC,
       grammarSlots: DEFAULT_SLOTS.slice(),
     };
     try {
-      const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
-      if (['classic', 'grammar', 'audio'].includes(saved.mode)) defaults.mode = saved.mode;
+      const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || localStorage.getItem(LEGACY_STORAGE_KEY) || '{}');
+      defaults.mode = 'grammar';
       if (LANGUAGE_LEVELS.includes(saved.level)) defaults.level = saved.level;
       if (LEXICAL_TOPICS.includes(saved.lexicalTopic)) defaults.lexicalTopic = saved.lexicalTopic;
+      if (GRAMMAR_TOPICS.includes(normalizeTopic(saved.grammarTopic))) {
+        defaults.grammarTopic = normalizeTopic(saved.grammarTopic);
+      }
       if (Array.isArray(saved.grammarSlots) && saved.grammarSlots.length) {
         defaults.grammarSlots = DEFAULT_SLOTS.map((slot, i) => normalizeTopic(saved.grammarSlots[i] || slot));
+        if (!saved.grammarTopic) defaults.grammarTopic = defaults.grammarSlots[0] || DEFAULT_GRAMMAR_TOPIC;
       }
     } catch (_) {
       // Corrupt localStorage should never block the game.
@@ -218,11 +238,14 @@
       this.generationAllowed = false;
       this.preparing = false;
       this.status = { generationConfigured: false, ttsConfigured: false, checked: false };
+      this.lastError = '';
       this.statusPromise = this.checkStatus();
     }
 
     configure(next) {
       this.settings = { ...this.settings, ...next };
+      this.settings.mode = 'grammar';
+      this.settings.grammarTopic = normalizeTopic(this.settings.grammarTopic || DEFAULT_GRAMMAR_TOPIC);
       this.settings.grammarSlots = (this.settings.grammarSlots || DEFAULT_SLOTS).map((topic, i) => normalizeTopic(topic || DEFAULT_SLOTS[i % DEFAULT_SLOTS.length]));
       saveSettings(this.settings);
       this.renderSettingsMenu();
@@ -246,7 +269,6 @@
 
     pickQuestion(cat = 'mix', context = {}) {
       if (cat !== 'mix' || this.settings.mode === 'classic') return pickLegacyQuestion(cat);
-      if (this.settings.mode === 'audio') return this.pickAudioQuestion(context);
       return this.pickGrammarQuestion(context);
     }
 
@@ -266,14 +288,14 @@
 
     prefetch() {
       if (!this.generationAllowed) return Promise.resolve([]);
-      if (this.settings.mode === 'audio') this.ensureAudioPool();
-      if (this.settings.mode === 'grammar') this.ensurePool(this.slotForBridge(0));
+      this.ensurePool(this.slotForBridge(0));
     }
 
     async prepareForGame(options = {}) {
       await this.statusPromise;
       this.generationAllowed = true;
-      if (this.settings.mode === 'classic' || !this.status.generationConfigured) {
+      this.settings.mode = 'grammar';
+      if (!this.status.generationConfigured) {
         this.renderSettingsMenu();
         return { ok: true, generated: false };
       }
@@ -283,23 +305,9 @@
       this.preparing = true;
       this.renderSettingsMenu();
       try {
-        if (this.settings.mode === 'audio') {
-          const pool = await this.ensureAudioPool(floors, floors);
-          if ((pool?.length || 0) < floors) throw new Error('AI audio questions are not ready');
-        } else {
-          const needs = new Map();
-          for (let i = 0; i < floors; i++) {
-            const slot = this.slotForBridge(startFloor + i);
-            const key = this.slotKey(slot);
-            const current = needs.get(key) || { slot, count: 0 };
-            current.count += 1;
-            needs.set(key, current);
-          }
-          await Promise.all([...needs.entries()].map(async ([key, { slot, count }]) => {
-            const pool = await this.ensurePool(slot, count, count);
-            if ((pool?.length || 0) < count) throw new Error(`AI questions are not ready for ${key}`);
-          }));
-        }
+        const slot = this.slotForBridge(startFloor);
+        const pool = await this.ensurePool(slot, floors, floors);
+        if ((pool?.length || 0) < floors) throw new Error(`AI questions are not ready for ${slot.grammarTopic}`);
         return { ok: true, generated: true };
       } finally {
         this.preparing = false;
@@ -308,9 +316,8 @@
     }
 
     slotForBridge(floor) {
-      const slots = this.settings.grammarSlots && this.settings.grammarSlots.length ? this.settings.grammarSlots : DEFAULT_SLOTS;
-      const index = Math.max(0, (Number(floor) || 1) - 1) % slots.length;
-      const grammarTopic = normalizeTopic(slots[index]);
+      const grammarTopic = normalizeTopic(this.settings.grammarTopic || DEFAULT_GRAMMAR_TOPIC);
+      const index = 0;
       return { grammarTopic, isWortstellung: isWortstellungTopic(grammarTopic), bridgeIndex: index };
     }
 
@@ -358,20 +365,14 @@
 
     poolHasQuestion(context = {}) {
       if (!this.generationAllowed) return true;
-      if (this.settings.mode === 'classic' || !this.status.generationConfigured) return true;
-      const key = this.settings.mode === 'audio'
-        ? this.audioKey()
-        : this.slotKey(this.slotForBridge(context.floor || 0));
+      if (!this.status.generationConfigured) return true;
+      const key = this.slotKey(this.slotForBridge(context.floor || 0));
       return (this.generatedPools[key]?.length || 0) > 0;
     }
 
     async ensureQuestionAvailable(context = {}) {
       if (!this.generationAllowed) return;
-      if (this.settings.mode === 'classic' || !this.status.generationConfigured) return;
-      if (this.settings.mode === 'audio') {
-        await this.ensureAudioPool(1, 10);
-        return;
-      }
+      if (!this.status.generationConfigured) return;
       const slot = this.slotForBridge(context.floor || 0);
       await this.ensurePool(slot, 1, 10);
     }
@@ -399,10 +400,12 @@
         .then((data) => {
           const valid = (data.questions || []).filter(validRawQuestion);
           this.generatedPools[key] = [...(this.generatedPools[key] || []), ...shuffle(valid)];
+          this.lastError = '';
           return this.generatedPools[key];
         })
         .catch((error) => {
-          console.warn('Mosty quiz generation fallback:', error);
+          console.warn('See Escape quiz generation fallback:', error);
+          this.lastError = error?.message || 'generation failed';
           return [];
         })
         .finally(() => {
@@ -434,10 +437,12 @@
         .then((data) => {
           const valid = (data.questions || []).filter((question) => validRawQuestion(question) && question.audioText);
           this.generatedPools[key] = [...(this.generatedPools[key] || []), ...shuffle(valid)];
+          this.lastError = '';
           return this.generatedPools[key];
         })
         .catch((error) => {
-          console.warn('Mosty audio quiz generation fallback:', error);
+          console.warn('See Escape audio quiz generation fallback:', error);
+          this.lastError = error?.message || 'audio generation failed';
           return [];
         })
         .finally(() => {
@@ -450,8 +455,9 @@
 
     fallbackQuestion(slot) {
       const maxRank = LEVEL_RANK[this.settings.level] || LEVEL_RANK.A2;
-      const candidates = this.fallbackPool.filter((question) => (LEVEL_RANK[question.level] || 1) <= maxRank);
-      const source = candidates.length ? candidates : this.fallbackPool;
+      const leveled = this.fallbackPool.filter((question) => (LEVEL_RANK[question.level] || 1) <= maxRank);
+      const topical = leveled.filter((question) => sameTopic(question.topic, slot.grammarTopic));
+      const source = topical.length ? topical : (leveled.length ? leveled : this.fallbackPool);
       const raw = source[this.fallbackCursor % source.length];
       this.fallbackCursor += 1;
       return this.formatGrammarQuestion(raw, slot, false);
@@ -510,36 +516,31 @@
       if (!root) return;
       const fetchingNow = this.preparing || Object.keys(this.fetching).length > 0;
       const statusKind = this.status.generationConfigured
-        ? (fetchingNow ? 'loading' : 'online')
+        ? (this.lastError ? 'fallback' : fetchingNow ? 'loading' : 'online')
         : 'fallback';
       const statusText = this.preparing
         ? 'AI готовит стартовые вопросы'
+        : this.lastError
+        ? 'AI не ответил, fallback'
         : statusKind === 'loading'
         ? 'AI подгружает вопросы'
         : statusKind === 'online'
           ? 'AI подключен'
           : 'Fallback вопросы';
 
-      root.querySelectorAll('[data-mode]').forEach((button) => {
-        const selected = button.dataset.mode === this.settings.mode;
-        button.classList.toggle('selected', selected);
-        button.setAttribute('aria-pressed', selected ? 'true' : 'false');
-      });
       root.querySelectorAll('[data-level]').forEach((button) => {
         const selected = button.dataset.level === this.settings.level;
         button.classList.toggle('selected', selected);
         button.setAttribute('aria-pressed', selected ? 'true' : 'false');
       });
-      const lexical = root.querySelector('#learning-lexical');
-      if (lexical) lexical.value = this.settings.lexicalTopic;
-      root.querySelectorAll('[data-slot-index]').forEach((select) => {
-        select.value = this.settings.grammarSlots[Number(select.dataset.slotIndex)] || DEFAULT_SLOTS[0];
-      });
+      const grammar = root.querySelector('#learning-grammar');
+      if (grammar) grammar.value = this.settings.grammarTopic || DEFAULT_GRAMMAR_TOPIC;
       const status = root.querySelector('#learning-status');
-      if (status) status.textContent = statusText;
+      if (status) {
+        status.textContent = statusText;
+        status.title = this.lastError || '';
+      }
       root.dataset.status = statusKind;
-      root.classList.toggle('classic', this.settings.mode === 'classic');
-      root.classList.toggle('audio', this.settings.mode === 'audio');
     }
   }
 
@@ -554,19 +555,19 @@
     menu.innerHTML = `
       <div class="learning-head">
         <div>
-          <div class="learning-kicker">Квиз</div>
-          <div class="learning-title">Настройка раунда</div>
+          <div class="learning-kicker">Немецкий</div>
+          <div class="learning-title">Тема заданий</div>
         </div>
         <div id="learning-status" class="learning-status"></div>
       </div>
       <div class="learning-controls">
         <section class="control-block">
-          <div class="control-label">Режим</div>
-          <div class="segmented mode-row">
-            <button type="button" data-mode="grammar">Грамматика</button>
-            <button type="button" data-mode="audio">Аудио</button>
-            <button type="button" data-mode="classic">Классика</button>
-          </div>
+          <label class="field">
+            <span>Грамматическая тема</span>
+            <select id="learning-grammar">
+              ${GRAMMAR_TOPICS.map((topic) => `<option value="${topic}">${topic}</option>`).join('')}
+            </select>
+          </label>
         </section>
         <section class="control-block">
           <div class="control-label">Уровень</div>
@@ -575,33 +576,10 @@
           </div>
         </section>
       </div>
-      <div class="learning-form">
-        <label class="field learning-select">
-          <span>Лексика</span>
-          <select id="learning-lexical">
-            ${LEXICAL_TOPICS.map((topic) => `<option value="${topic}">${topic}</option>`).join('')}
-          </select>
-        </label>
-        <div class="slot-grid" aria-label="Темы мостов">
-          ${DEFAULT_SLOTS.map((slot, index) => `
-            <label class="field">
-              <span>Мост ${index + 1}</span>
-              <select data-slot-index="${index}">
-                ${GRAMMAR_TOPICS.map((topic) => `<option value="${topic}"${topic === slot ? ' selected' : ''}>${topic}</option>`).join('')}
-              </select>
-            </label>
-          `).join('')}
-        </div>
-      </div>
     `;
     panel.insertBefore(menu, document.getElementById('start'));
 
     menu.addEventListener('click', (event) => {
-      const modeButton = event.target.closest('[data-mode]');
-      if (modeButton) {
-        bank.configure({ mode: modeButton.dataset.mode });
-        return;
-      }
       const levelButton = event.target.closest('[data-level]');
       if (levelButton) {
         bank.configure({ level: levelButton.dataset.level });
@@ -609,14 +587,8 @@
     });
 
     menu.addEventListener('change', (event) => {
-      if (event.target.id === 'learning-lexical') {
-        bank.configure({ lexicalTopic: event.target.value });
-        return;
-      }
-      if (event.target.matches('[data-slot-index]')) {
-        const slots = bank.settings.grammarSlots.slice();
-        slots[Number(event.target.dataset.slotIndex)] = event.target.value;
-        bank.configure({ grammarSlots: slots });
+      if (event.target.id === 'learning-grammar') {
+        bank.configure({ grammarTopic: event.target.value });
       }
     });
 
@@ -703,7 +675,8 @@
 
   const bank = new QuestionBank();
   window.QUESTIONS = LEGACY_QUESTIONS;
-  window.MOSTY_LEARNING = { LANGUAGE_LEVELS, LEXICAL_TOPICS, GRAMMAR_TOPICS, bank };
+  window.SEE_ESCAPE_LEARNING = { LANGUAGE_LEVELS, LEXICAL_TOPICS, GRAMMAR_TOPICS, bank };
+  window.MOSTY_LEARNING = window.SEE_ESCAPE_LEARNING;
   window.QuizQuestionBank = bank;
   window.pickQuestion = (cat, context) => bank.pickQuestion(cat, context);
   window.prepareMostyQuiz = (options) => bank.prepareForGame(options);
@@ -713,7 +686,6 @@
   window.quizEnsureQuestionAvailable = (context) => bank.ensureQuestionAvailable(context);
   window.playQuizAudio = (question, force) => AudioQuiz.play(question, force);
   window.replayQuizAudio = () => AudioQuiz.replay();
-  window.SEE_ESCAPE_LEARNING = window.MOSTY_LEARNING;
 
   document.addEventListener('DOMContentLoaded', () => {
     createLearningMenu(bank);

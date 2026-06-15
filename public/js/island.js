@@ -6,6 +6,7 @@ import { loadIslandLayout } from "./island-layout.js?v=20260609-quest-zone-scale
 const ISLAND_POSITION = new THREE.Vector3(-320, 0, 1420);
 const ISLAND_FIRE_RANGE = 900;
 const ISLAND_MUZZLE_SPEED = 235;
+const ISLAND_DECOR_LOAD_RANGE = 1150;
 
 function mat(color, roughness = 0.86, metalness = 0) {
   return new THREE.MeshStandardMaterial({ color, roughness, metalness });
@@ -126,8 +127,9 @@ export class IslandFortress {
     this.cannons = [];
     this.layout = loadIslandLayout();
     this._tmp = new THREE.Vector3();
+    this.decorLoading = false;
+    this.decorLoaded = false;
     this._build();
-    this._loadDecorModels();
   }
 
   _build() {
@@ -186,6 +188,8 @@ export class IslandFortress {
   }
 
   async _loadDecorModels() {
+    if (this.decorLoading || this.decorLoaded) return;
+    this.decorLoading = true;
     const assets = {
       low_poly_island: { url: "models/low_poly_island.glb", name: "LoadedLowPolyIslandModel" },
       relic: { url: "models/relic_optimized.glb", name: "LoadedRelicAltarModel" },
@@ -209,6 +213,8 @@ export class IslandFortress {
     for (const result of results) {
       if (result.status === "rejected") console.warn("Island decor model failed:", result.reason);
     }
+    this.decorLoaded = true;
+    this.decorLoading = false;
   }
 
   activeCannons() {
@@ -217,6 +223,9 @@ export class IslandFortress {
 
   update(dt) {
     const player = this.getPlayerTarget();
+    if (!this.decorLoaded && !this.decorLoading && player.pos.distanceTo(this.group.position) <= ISLAND_DECOR_LOAD_RANGE) {
+      this._loadDecorModels();
+    }
     for (const cannon of this.activeCannons()) {
       const cannonPosition = cannon.mount.getWorldPosition(new THREE.Vector3());
       cannon.mount.lookAt(player.pos.x, cannonPosition.y, player.pos.z);

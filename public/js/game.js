@@ -2,7 +2,7 @@
 // the waves), the player's aimable cannons, an AI enemy fleet trading
 // realistic cannonball fire, wood-debris impacts, and the HUD/main loop.
 import * as THREE from "three";
-import { createWorld } from "./ocean.js?v=20260614-flood-visuals-v7";
+import { createWorld } from "./ocean.js?v=20260615-render-perf-v1";
 import { EffectsSystem } from "./effects.js?v=20260614-flood-visuals-v5";
 import { ProjectileSystem } from "./ballistics.js?v=20260603-bonuses-island-v1";
 import { buildPlayerShip, SHIP_DEFAULTS } from "./ship.js?v=20260614-buoyancy-v2";
@@ -13,12 +13,12 @@ import { loadAndAnalyzeShip } from "./models.js?v=20260607-assets-fire-v1";
 import { applyCollisionProfile, loadAppliedCollisionProfile } from "./collision-profile.js?v=20260609-remove-hold-helpers-v1";
 import { SailingSystem } from "./sailing.js?v=20260603-bonuses-island-v1";
 import { TreasureSystem } from "./treasure.js?v=20260603-bonuses-island-v1";
-import { IslandFortress } from "./island.js?v=20260609-quest-zone-scale-v4";
+import { IslandFortress } from "./island.js?v=20260615-lazy-island-v1";
 import { BonusSystem } from "./bonuses.js?v=20260611-audio-guide-v1";
 import { IslandQuestSystem } from "./island-quest.js?v=20260611-audio-guide-v1";
 import { applyCannonLayout, loadCannonLayout } from "./cannon-layout.js?v=20260609-default-profile-v2";
 import { AudioGuide } from "./audio-guide.js?v=20260615-once-hints-v1";
-import { ActionQuizGate } from "./action-quiz.js?v=20260615-once-hints-v1";
+import { ActionQuizGate } from "./action-quiz.js?v=20260615-render-one-topic-v1";
 
 export async function startGame(container, hud) {
   const world = createWorld(container);
@@ -127,19 +127,9 @@ export async function startGame(container, hud) {
     bonusSystem?.showChoices();
   });
 
-  // Load + measure the enemy ship model (cheap clones per spawn).
+  // Enemy GLB loads in the background; primitive enemies are good enough until it arrives.
   let enemyDims = { length: 72, beam: 18, deckY: 9, keelY: -9 };
   let enemyFactory = null;
-  try {
-    const r = await loadAndAnalyzeShip("models/low-poly_pirate_ship.glb", {
-      targetLength: 72,
-      flip: false,
-    });
-    enemyDims = r.dims;
-    enemyFactory = () => r.pivot.clone(true);
-  } catch (e) {
-    console.warn("Enemy ship model failed, using primitives:", e);
-  }
 
   const fleet = new EnemyFleet(scene, sampleWaveHeight, projectiles, effects, getPlayerTarget, {
     dims: enemyDims,
@@ -182,6 +172,21 @@ export async function startGame(container, hud) {
       winAtIsland();
     },
   });
+
+  loadAndAnalyzeShip("models/low-poly_pirate_ship.glb", {
+    targetLength: 72,
+    flip: false,
+  })
+    .then((r) => {
+      enemyDims = r.dims;
+      enemyFactory = () => r.pivot.clone(true);
+      fleet.dims = enemyDims;
+      fleet.factory = enemyFactory;
+      islandQuest.raiderShipFactory = enemyFactory;
+    })
+    .catch((e) => {
+      console.warn("Enemy ship model failed, using primitives:", e);
+    });
 
   const player = new PlayerController({
     scene,
