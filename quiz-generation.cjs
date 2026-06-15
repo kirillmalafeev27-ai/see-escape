@@ -6,7 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 
-const DEFAULT_MODELS = 'gpt-4o-mini,gpt-4o';
+const DEFAULT_MODELS = 'gpt-5.4';
 const AI_MODELS_SOURCE =
   process.env.AI_MODELS ||
   process.env.AITUNNEL_MODELS ||
