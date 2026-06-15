@@ -126,6 +126,8 @@ export class EffectsSystem {
     this.splinters = new ParticlePool(scene, 1200, { size: 1.4, gravity: -28, drag: 1.6 });
     this.dust = new ParticlePool(scene, 800, { size: 6.0, gravity: -2, drag: 2.2 });
     this.splash = new ParticlePool(scene, 1000, { size: 3.0, gravity: -34, drag: 1.0 });
+    this.flow = new ParticlePool(scene, 2200, { size: 3.6, gravity: -22, drag: 0.35 });
+    this.floodMist = new ParticlePool(scene, 700, { size: 1.15, gravity: -2.2, drag: 2.4 });
     this.glow = new ParticlePool(scene, 600, { size: 5.0, gravity: -4, drag: 2.0, blending: THREE.AdditiveBlending });
 
     // Wood debris chunks (splinter-shaped boxes) with simple ballistics.
@@ -137,7 +139,7 @@ export class EffectsSystem {
       roughness: 0.9,
       metalness: 0.0,
     });
-    this.maxDebris = 90;
+    this.maxDebris = 180;
   }
 
   _getPlank() {
@@ -224,6 +226,61 @@ export class EffectsSystem {
     });
   }
 
+  waterFlow(point, direction, strength = 1) {
+    this.flow.emit(point, Math.max(1, Math.round(4 * strength)), {
+      baseDir: direction,
+      spread: 0.32,
+      speedMin: 5,
+      speedMax: 11,
+      lifeMin: 0.7,
+      lifeMax: 1.35,
+      color: [0.52, 0.82, 0.96],
+      colorJitter: 0.08,
+      up: 0,
+    });
+  }
+
+  calmFlood(point, strength = 1) {
+    this.floodMist.emit(point, 1, {
+      baseDir: new THREE.Vector3(0, 1, 0),
+      spread: 0.12,
+      speedMin: 0.12,
+      speedMax: 0.55 + strength * 0.35,
+      lifeMin: 0.25,
+      lifeMax: 0.62,
+      color: [0.55, 0.82, 0.95],
+      colorJitter: 0.06,
+      up: 0.25 + strength * 0.35,
+    });
+  }
+
+  fireAt(point, strength = 1) {
+    const up = new THREE.Vector3(0, 1, 0);
+    const glowCount = Math.max(2, Math.round(8 * strength));
+    this.glow.emit(point, glowCount, {
+      baseDir: up,
+      spread: 0.62,
+      speedMin: 2.5,
+      speedMax: 8.5,
+      lifeMin: 0.18,
+      lifeMax: 0.42,
+      color: [1.0, 0.42, 0.12],
+      colorJitter: 0.16,
+      up: 3.5,
+    });
+    this.dust.emit(point, Math.max(1, Math.round(3 * strength)), {
+      baseDir: up,
+      spread: 0.85,
+      speedMin: 1.5,
+      speedMax: 5.5,
+      lifeMin: 0.85,
+      lifeMax: 1.8,
+      color: [0.08, 0.07, 0.06],
+      colorJitter: 0.05,
+      up: 4.5,
+    });
+  }
+
   muzzleFlash(point, dir) {
     const d = dir.clone().normalize();
     this.glow.emit(point, 26, {
@@ -251,6 +308,8 @@ export class EffectsSystem {
     this.splinters.update(dt);
     this.dust.update(dt);
     this.splash.update(dt);
+    this.flow.update(dt);
+    this.floodMist.update(dt);
     this.glow.update(dt);
 
     for (let i = this.debris.length - 1; i >= 0; i--) {

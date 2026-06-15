@@ -8,14 +8,16 @@
 import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { DRACOLoader } from "three/addons/loaders/DRACOLoader.js";
+import { MeshoptDecoder } from "three/addons/libs/meshopt_decoder.module.js";
 
 const draco = new DRACOLoader();
 draco.setDecoderPath("https://www.gstatic.com/draco/v1/decoders/");
 const loader = new GLTFLoader();
 loader.setDRACOLoader(draco);
+loader.setMeshoptDecoder(MeshoptDecoder);
 
 const cache = new Map();
-function loadGLTF(url) {
+export function loadGLTF(url) {
   if (!cache.has(url)) {
     cache.set(url, new Promise((res, rej) => loader.load(url, res, undefined, rej)));
   }
@@ -25,7 +27,28 @@ function loadGLTF(url) {
 const DOWN = new THREE.Vector3(0, -1, 0);
 const NON_SHIP_NODE = /(?:water|ocean|sea|ground)(?:[\s_-]*plane)?/i;
 const WALKABLE_NODE = /(?:floor|stairs|deck)/i;
-const NON_SOLID_NODE = /(?:sail|flag|wire|rope)/i;
+const STAIRS_NODE = /(?:stairs|ladder)/i;
+const MAST_NODE = /(?:mast(?:back|front|mid)?)/i;
+// These parts still render, but should not become broad navigation blockers.
+// Decks, visible outer fencing, the hull, and explicit mast colliders remain solid.
+const NON_SOLID_NODE = /(?:sail|flag|wire|rope|cannon|bracing|support|wall|loophole|window|door|barrel|box|pallet)/i;
+const CANNON_NODE = /^StylShip_Cannon\d+$/i;
+const CANNON_WHEEL_LATERAL_CENTER = 5.7;
+const CANNON_WHEEL_MAX_LENGTH = 12;
+const MAST_COLLIDER_PADDING = 0.08;
+const MAST_GRATE_MARGIN = 4.1;
+const MAST_GRATE_MIN_SIZE = 9.2;
+const MAST_GRATE_FLOOR_THICKNESS = 0.12;
+const MAST_GRATE_SURFACE_LIFT = 0.14;
+const STAIR_RAMP_THICKNESS = 0.16;
+const STAIR_RAMP_END_EXTENSION = 0.5;
+const STAIR_RAMP_TOP_EXTENSION = 1.25;
+const STAIR_RAMP_SURFACE_LIFT = 0.05;
+const DECK_SUPPORT_THICKNESS = 0.12;
+const DECK_SUPPORT_LIFT = 0.08;
+const DECK_SUPPORT_INSET = 0.48;
+const STAIR_OPENING_MARGIN = 0.32;
+const MIN_DECK_SUPPORT_SPAN = 0.45;
 
 function removeNonShipNodes(parent) {
   for (const child of [...parent.children]) {
@@ -39,23 +62,376 @@ function removeNonShipNodes(parent) {
 
 function collectNavigationMeshes(root) {
   const walkableMeshes = [];
+  const stairMeshes = [];
+  const mastMeshes = [];
   const solidMeshes = [];
   root.traverse((o) => {
     if (!o.isMesh) return;
+    if (MAST_NODE.test(o.name || "")) {
+      mastMeshes.push(o);
+      return;
+    }
     if (WALKABLE_NODE.test(o.name || "")) {
       walkableMeshes.push(o);
+      if (STAIRS_NODE.test(o.name || "")) stairMeshes.push(o);
     } else if (!NON_SOLID_NODE.test(o.name || "")) {
       solidMeshes.push(o);
     }
   });
-  return { walkableMeshes, solidMeshes };
+  return { walkableMeshes, stairMeshes, mastMeshes, solidMeshes };
+}
+
+function median(values) {
+  values.sort((a, b) => a - b);
+  return values[Math.floor(values.length / 2)];
+}
+
+function percentile(values, fraction) {
+  values.sort((a, b) => a - b);
+  return values[Math.min(values.length - 1, Math.floor(values.length * fraction))];
+}
+
+function collectWorldVertices(mesh) {
+  mesh.updateWorldMatrix(true, false);
+  const position = mesh.geometry.getAttribute("position");
+  const vertices = [];
+  for (let i = 0; i < position.count; i++) {
+    vertices.push(new THREE.Vector3().fromBufferAttribute(position, i).applyMatrix4(mesh.matrixWorld));
+  }
+  return vertices;
+}
+
+function invisibleNavigationMaterial() {
+  return new THREE.MeshBasicMaterial({
+    transparent: true,
+    opacity: 0,
+    depthWrite: false,
+    colorWrite: false,
+  });
+}
+
+function buildMastNavigation(mastMeshes, walkableMeshes, navigationRoot) {
+  const invisible = invisibleNavigationMaterial();
+  const ray = new THREE.Raycaster();
+  ray.ray.direction.copy(DOWN);
+
+  function deckYNear(x, z, offset, top) {
+    const hitsY = [];
+    for (const [dx, dz] of [
+      [offset, 0],
+      [-offset, 0],
+      [0, offset],
+      [0, -offset],
+      [offset * 0.72, offset * 0.72],
+      [-offset * 0.72, offset * 0.72],
+      [offset * 0.72, -offset * 0.72],
+      [-offset * 0.72, -offset * 0.72],
+    ]) {
+      ray.ray.origin.set(x + dx, top, z + dz);
+      ray.far = 200;
+      const hit = ray.intersectObjects(walkableMeshes, false)[0];
+      if (hit) hitsY.push(hit.point.y);
+    }
+    return hitsY.length ? median(hitsY) : null;
+  }
+
+  for (const mast of mastMeshes) {
+    const vertices = collectWorldVertices(mast);
+    if (!vertices.length) continue;
+    const box = new THREE.Box3().setFromPoints(vertices);
+    const height = box.max.y - box.min.y;
+    const lowerBand = vertices.filter((vertex) => vertex.y <= box.min.y + Math.min(3, height * 0.18));
+    if (!lowerBand.length) continue;
+
+    const x = median(lowerBand.map((vertex) => vertex.x));
+    const z = median(lowerBand.map((vertex) => vertex.z));
+    const radius =
+      Math.max(
+        percentile(lowerBand.map((vertex) => Math.abs(vertex.x - x)), 0.9),
+        percentile(lowerBand.map((vertex) => Math.abs(vertex.z - z)), 0.9)
+      ) + MAST_COLLIDER_PADDING;
+
+    const collider = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius, height, 16), invisible);
+    collider.name = `${mast.name}_TrunkCollider`;
+    collider.position.set(x, (box.min.y + box.max.y) / 2, z);
+    navigationRoot.add(collider);
+
+    const grateSize = Math.max(MAST_GRATE_MIN_SIZE, (radius + MAST_GRATE_MARGIN) * 2);
+    const deckY = deckYNear(x, z, grateSize * 0.38, box.max.y + 4);
+    if (deckY === null) continue;
+    const grateFloor = new THREE.Mesh(
+      new THREE.BoxGeometry(grateSize, MAST_GRATE_FLOOR_THICKNESS, grateSize),
+      invisible
+    );
+    grateFloor.name = `${mast.name}_GrateFloor`;
+    grateFloor.position.set(x, deckY + MAST_GRATE_SURFACE_LIFT - MAST_GRATE_FLOOR_THICKNESS / 2, z);
+    navigationRoot.add(grateFloor);
+    walkableMeshes.push(grateFloor);
+  }
+  navigationRoot.updateMatrixWorld(true);
+  return { mastColliders: navigationRoot.children.filter((o) => /TrunkCollider$/.test(o.name)) };
+}
+
+function buildStairNavigation(stairMeshes, walkableMeshes, navigationRoot) {
+  const invisible = invisibleNavigationMaterial();
+  const ray = new THREE.Raycaster();
+  ray.ray.direction.copy(DOWN);
+  const ramps = [];
+  const originalStairs = [...stairMeshes];
+  const deckMeshes = [...walkableMeshes];
+
+  function surfaceY(objects, x, z, top) {
+    const hitsY = [];
+    for (const xOffset of [-0.26, 0, 0.26]) {
+      ray.ray.origin.set(x + xOffset, top, z);
+      ray.far = 200;
+      const hit = ray.intersectObjects(objects, false)[0];
+      if (hit) hitsY.push(hit.point.y);
+    }
+    return hitsY.length ? median(hitsY) : null;
+  }
+
+  for (const stair of originalStairs) {
+    const box = new THREE.Box3().setFromObject(stair);
+    const width = box.max.x - box.min.x;
+    const run = box.max.z - box.min.z;
+    if (width < 0.2 || run < 0.2) continue;
+
+    const x = (box.min.x + box.max.x) / 2;
+    const samples = [];
+    for (const fraction of [0.08, 0.22, 0.36, 0.5, 0.64, 0.78, 0.92]) {
+      const z = THREE.MathUtils.lerp(box.min.z, box.max.z, fraction);
+      const y = surfaceY([stair], x, z, box.max.y + 2);
+      if (y !== null) samples.push({ z, y });
+    }
+    if (samples.length < 2) continue;
+
+    const first = samples[0];
+    const last = samples[samples.length - 1];
+    const risePerZ = (last.y - first.y) / Math.max(1e-4, last.z - first.z);
+    const highDirection = risePerZ >= 0 ? 1 : -1;
+    const lowZ = highDirection > 0 ? box.min.z : box.max.z;
+    const highZ = highDirection > 0 ? box.max.z : box.min.z;
+    const lowSample = highDirection > 0 ? first : last;
+    const highSample = highDirection > 0 ? last : first;
+    const lowY = lowSample.y + (lowZ - lowSample.z) * risePerZ;
+    let highY = highSample.y + (highZ - highSample.z) * risePerZ;
+
+    const topZ = highZ + highDirection * STAIR_RAMP_TOP_EXTENSION;
+    const deckY = surfaceY(
+      deckMeshes.filter((mesh) => mesh !== stair),
+      x,
+      topZ,
+      box.max.y + 4
+    );
+    if (deckY !== null && deckY >= highY - 0.35) highY = deckY;
+
+    const startZ = lowZ - highDirection * STAIR_RAMP_END_EXTENSION;
+    const endZ = topZ;
+    const startY = lowY - STAIR_RAMP_END_EXTENSION * Math.abs(risePerZ);
+    const endY = highY;
+    const rampRun = Math.abs(endZ - startZ);
+    const angle = Math.atan2(endY - startY, endZ - startZ);
+    const slopeLength = Math.hypot(rampRun, endY - startY);
+    const ramp = new THREE.Mesh(
+      new THREE.BoxGeometry(width * 0.96, STAIR_RAMP_THICKNESS, slopeLength),
+      invisible
+    );
+    ramp.name = `${stair.name}_StairsRamp`;
+    ramp.position.set(
+      x,
+      (startY + endY) / 2 - STAIR_RAMP_THICKNESS / 2 + STAIR_RAMP_SURFACE_LIFT,
+      (startZ + endZ) / 2
+    );
+    ramp.rotation.x = -angle;
+    ramp.userData.lowLanding = [x, startY + STAIR_RAMP_SURFACE_LIFT, startZ];
+    ramp.userData.highLanding = [x, endY + STAIR_RAMP_SURFACE_LIFT, endZ];
+    navigationRoot.add(ramp);
+    walkableMeshes.push(ramp);
+    stairMeshes.push(ramp);
+    ramps.push(ramp);
+  }
+
+  navigationRoot.updateMatrixWorld(true);
+  return ramps;
+}
+
+function subtractRect(rect, hole) {
+  const minX = Math.max(rect.minX, hole.minX);
+  const maxX = Math.min(rect.maxX, hole.maxX);
+  const minZ = Math.max(rect.minZ, hole.minZ);
+  const maxZ = Math.min(rect.maxZ, hole.maxZ);
+  if (minX >= maxX || minZ >= maxZ) return [rect];
+
+  return [
+    { minX: rect.minX, maxX: minX, minZ: rect.minZ, maxZ: rect.maxZ },
+    { minX: maxX, maxX: rect.maxX, minZ: rect.minZ, maxZ: rect.maxZ },
+    { minX, maxX, minZ: rect.minZ, maxZ: minZ },
+    { minX, maxX, minZ: maxZ, maxZ: rect.maxZ },
+  ].filter(
+    (part) =>
+      part.maxX - part.minX >= MIN_DECK_SUPPORT_SPAN &&
+      part.maxZ - part.minZ >= MIN_DECK_SUPPORT_SPAN
+  );
+}
+
+function buildDeckNavigation(walkableMeshes, stairMeshes, navigationRoot) {
+  const invisible = invisibleNavigationMaterial();
+  const floors = walkableMeshes.filter(
+    (mesh) => /(?:floor|deck)/i.test(mesh.name || "") && !STAIRS_NODE.test(mesh.name || "")
+  );
+  const stairs = stairMeshes.filter((mesh) => !/_StairsRamp$/i.test(mesh.name || ""));
+
+  for (const floor of floors) {
+    const box = new THREE.Box3().setFromObject(floor);
+    const deckY = box.max.y + DECK_SUPPORT_LIFT;
+    let parts = [{
+      minX: box.min.x + DECK_SUPPORT_INSET,
+      maxX: box.max.x - DECK_SUPPORT_INSET,
+      minZ: box.min.z + DECK_SUPPORT_INSET,
+      maxZ: box.max.z - DECK_SUPPORT_INSET,
+    }];
+
+    for (const stair of stairs) {
+      const stairBox = new THREE.Box3().setFromObject(stair);
+      if (deckY < stairBox.min.y - 0.5 || deckY > stairBox.max.y + 0.5) continue;
+      const hole = {
+        minX: stairBox.min.x - STAIR_OPENING_MARGIN,
+        maxX: stairBox.max.x + STAIR_OPENING_MARGIN,
+        minZ: stairBox.min.z - STAIR_OPENING_MARGIN,
+        maxZ: stairBox.max.z + STAIR_OPENING_MARGIN,
+      };
+      parts = parts.flatMap((part) => subtractRect(part, hole));
+    }
+
+    for (const [index, part] of parts.entries()) {
+      const support = new THREE.Mesh(
+        new THREE.BoxGeometry(
+          part.maxX - part.minX,
+          DECK_SUPPORT_THICKNESS,
+          part.maxZ - part.minZ
+        ),
+        invisible
+      );
+      support.name = `${floor.name}_DeckSupport_${index}`;
+      support.position.set(
+        (part.minX + part.maxX) / 2,
+        deckY - DECK_SUPPORT_THICKNESS / 2,
+        (part.minZ + part.maxZ) / 2
+      );
+      navigationRoot.add(support);
+      walkableMeshes.push(support);
+    }
+  }
+  navigationRoot.updateMatrixWorld(true);
+}
+
+function stripCannonWheels(geometry) {
+  const index = geometry.getIndex();
+  const position = geometry.getAttribute("position");
+  if (!index || !position) return geometry;
+
+  const neighbors = Array.from({ length: position.count }, () => []);
+  for (let i = 0; i < index.count; i += 3) {
+    const a = index.getX(i);
+    const b = index.getX(i + 1);
+    const c = index.getX(i + 2);
+    neighbors[a].push(b, c);
+    neighbors[b].push(a, c);
+    neighbors[c].push(a, b);
+  }
+
+  const visited = new Uint8Array(position.count);
+  const wheelVertex = new Uint8Array(position.count);
+  for (let start = 0; start < position.count; start++) {
+    if (visited[start] || !neighbors[start].length) continue;
+    const stack = [start];
+    const component = [];
+    let lateralSum = 0;
+    let minX = Infinity;
+    let maxX = -Infinity;
+    visited[start] = 1;
+    while (stack.length) {
+      const vertex = stack.pop();
+      component.push(vertex);
+      lateralSum += position.getY(vertex);
+      minX = Math.min(minX, position.getX(vertex));
+      maxX = Math.max(maxX, position.getX(vertex));
+      for (const neighbor of neighbors[vertex]) {
+        if (visited[neighbor]) continue;
+        visited[neighbor] = 1;
+        stack.push(neighbor);
+      }
+    }
+    if (
+      Math.abs(lateralSum / component.length) < CANNON_WHEEL_LATERAL_CENTER ||
+      maxX - minX > CANNON_WHEEL_MAX_LENGTH
+    ) {
+      continue;
+    }
+    for (const vertex of component) wheelVertex[vertex] = 1;
+  }
+
+  const kept = [];
+  for (let i = 0; i < index.count; i += 3) {
+    const a = index.getX(i);
+    const b = index.getX(i + 1);
+    const c = index.getX(i + 2);
+    if (!wheelVertex[a] && !wheelVertex[b] && !wheelVertex[c]) kept.push(a, b, c);
+  }
+  geometry.setIndex(kept);
+  return geometry;
+}
+
+function extractCannonTemplate(root) {
+  let source = null;
+  const staticCannons = [];
+  root.traverse((o) => {
+    if (!CANNON_NODE.test(o.name || "")) return;
+    staticCannons.push(o);
+    if (!source) source = o;
+  });
+  if (!source) return null;
+
+  source.updateWorldMatrix(true, true);
+  const anchor = source.getWorldPosition(new THREE.Vector3());
+  const forward = new THREE.Vector3(-1, 0, 0).transformDirection(source.matrixWorld);
+  forward.y = 0;
+  if (forward.lengthSq() < 1e-5) forward.set(1, 0, 0);
+  forward.normalize();
+
+  const normalize = new THREE.Matrix4()
+    .makeRotationFromQuaternion(new THREE.Quaternion().setFromUnitVectors(forward, new THREE.Vector3(1, 0, 0)))
+    .multiply(new THREE.Matrix4().makeTranslation(-anchor.x, -anchor.y, -anchor.z));
+  const template = new THREE.Group();
+  template.name = "PlayerCannonModelTemplate";
+  source.traverse((o) => {
+    if (!o.isMesh) return;
+    const mesh = o.clone();
+    mesh.geometry = stripCannonWheels(o.geometry.clone());
+    mesh.geometry.applyMatrix4(normalize.clone().multiply(o.matrixWorld));
+    mesh.position.set(0, 0, 0);
+    mesh.rotation.set(0, 0, 0);
+    mesh.scale.set(1, 1, 1);
+    mesh.updateMatrix();
+    template.add(mesh);
+  });
+
+  const box = new THREE.Box3().setFromObject(template);
+  const center = box.getCenter(new THREE.Vector3());
+  const floorShift = new THREE.Matrix4().makeTranslation(0, -box.min.y, -center.z);
+  template.traverse((o) => {
+    if (o.isMesh) o.geometry.applyMatrix4(floorShift);
+  });
+  for (const cannon of staticCannons) cannon.visible = false;
+  return template;
 }
 
 export async function loadAndAnalyzeShip(url, { targetLength, flip = false, draftFraction = 0.4 }) {
   const gltf = await loadGLTF(url);
   const root = gltf.scene.clone(true);
   removeNonShipNodes(root);
-  const { walkableMeshes, solidMeshes } = collectNavigationMeshes(root);
+  const { walkableMeshes, stairMeshes, mastMeshes, solidMeshes } = collectNavigationMeshes(root);
 
   // Wrap so we manipulate wrappers, never assume anything about the root's own
   // transform. inner = recenter/orient, pivot = scale + waterline drop.
@@ -111,7 +487,23 @@ export async function loadAndAnalyzeShip(url, { targetLength, flip = false, draf
   const draft = draftFraction * deckRaw;
   pivot.position.y = -draft;
   pivot.updateMatrixWorld(true);
-
+  const navigationRoot = new THREE.Group();
+  navigationRoot.name = "PlayerNavigation";
+  const { mastColliders } = buildMastNavigation(mastMeshes, walkableMeshes, navigationRoot);
+  buildStairNavigation(stairMeshes, walkableMeshes, navigationRoot);
+  buildDeckNavigation(walkableMeshes, stairMeshes, navigationRoot);
+  solidMeshes.push(...mastColliders);
+  const cannonTemplate = extractCannonTemplate(root);
+  const stairZones = stairMeshes.map((mesh) => {
+    const box = new THREE.Box3().setFromObject(mesh);
+    box.min.x -= 0.8;
+    box.max.x += 0.8;
+    box.min.y -= 1.2;
+    box.max.y += 1.2;
+    box.min.z -= 1.8;
+    box.max.z += 1.8;
+    return box;
+  });
   pivot.traverse((o) => {
     if (o.isMesh) {
       o.castShadow = o.receiveShadow = false;
@@ -123,5 +515,13 @@ export async function loadAndAnalyzeShip(url, { targetLength, flip = false, draf
   });
 
   const dims = { length, beam, deckY: deckRaw - draft, keelY: -draft };
-  return { pivot, dims, walkableMeshes, solidMeshes };
+  return {
+    pivot,
+    navigationRoot,
+    dims,
+    walkableMeshes,
+    solidMeshes,
+    stairZones,
+    cannonTemplate,
+  };
 }

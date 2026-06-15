@@ -4,11 +4,26 @@
 // seabed. Visuals come from the .glb model when available (sized to the
 // measured dimensions), with a primitive hull as fallback.
 import * as THREE from "three";
-import { solveLaunchVelocity } from "./ballistics.js";
+import { solveLaunchVelocity } from "./ballistics.js?v=20260603-bonuses-island-v1";
 
 const ENEMY_DEFAULTS = { length: 72, beam: 18, deckY: 9, keelY: -9 };
 const MUZZLE_SPEED = 205;
 const STANDOFF = 380;
+const MAX_ALIVE = 2;
+const FIRST_SPAWN_DELAY = 10;
+const SPAWN_DELAY_MIN = 14;
+const SPAWN_DELAY_MAX = 24;
+const INITIAL_RELOAD_MIN = 10;
+const INITIAL_RELOAD_MAX = 18;
+const COMBAT_RELOAD_MIN = 14;
+const COMBAT_RELOAD_MAX = 24;
+const QUIZ_RELOAD_MIN = 20;
+const QUIZ_RELOAD_MAX = 32;
+const LEARNING_RELOAD_MIN = 22;
+const LEARNING_RELOAD_MAX = 36;
+const BUOYANCY_RESPONSE = 3.5;
+const HULL_BULWARK = 5;
+const SAIL_BASE_CLEARANCE = 4;
 
 function mat(c, r = 0.85, m = 0) {
   return new THREE.MeshStandardMaterial({ color: c, roughness: r, metalness: m });
@@ -58,10 +73,15 @@ export class EnemyFleet {
     this.getPlayerTarget = getPlayerTarget;
     this.dims = { ...ENEMY_DEFAULTS, ...(opts.dims || {}) };
     this.factory = opts.factory || null;
+    this.onSunk = opts.onSunk || (() => {});
+    this.onSpawn = opts.onSpawn || (() => {});
+    this.onFire = opts.onFire || (() => {});
     this.list = [];
-    this.maxAlive = 3;
-    this.spawnTimer = 2;
+    this.maxAlive = Number(opts.maxAlive || MAX_ALIVE);
+    this.spawnTimer = Number(opts.firstSpawnDelay || FIRST_SPAWN_DELAY);
     this.killCount = 0;
+    this.quizMode = false;
+    this.learningFireMode = false;
     this._tmp = new THREE.Vector3();
   }
 
@@ -79,17 +99,20 @@ export class EnemyFleet {
     this.list.push({
       group: built.group,
       muzzles: built.muzzles,
-      reload: 3 + Math.random() * 3,
+      reload: INITIAL_RELOAD_MIN + Math.random() * (INITIAL_RELOAD_MAX - INITIAL_RELOAD_MIN),
+      health: 100,
       sinking: false,
       sinkVel: 0,
       list: 0,
       halfL: this.dims.length * 0.42,
       halfW: this.dims.beam * 0.42,
+      buoyancyReady: false,
       accuracy: 0.04 + Math.random() * 0.05,
     });
+    this.onSpawn(built.group.position.clone());
   }
 
-  _buoyancy(e) {
+  _buoyancy(e, dt) {
     const g = e.group;
     const a = g.rotation.y;
     const s = Math.sin(a), c = Math.cos(a);
@@ -97,9 +120,20 @@ export class EnemyFleet {
     const h = (lx, lz) => this.sample(px + (lx * c + lz * s), pz + (-lx * s + lz * c));
     const bow = h(0, e.halfL), stern = h(0, -e.halfL);
     const stbd = h(e.halfW, 0), port = h(-e.halfW, 0);
-    g.position.y = (bow + stern + stbd + port) / 4;
-    g.rotation.x = Math.atan2(stern - bow, e.halfL * 2) * 0.8;
-    g.rotation.z = Math.atan2(stbd - port, e.halfW * 2) * 0.8 + e.list;
+    const targetY = (bow + stern + stbd + port) / 4;
+    const targetPitch = Math.atan2(stern - bow, e.halfL * 2) * 0.8;
+    const targetRoll = Math.atan2(stbd - port, e.halfW * 2) * 0.8 + e.list;
+    if (!e.buoyancyReady) {
+      g.position.y = targetY;
+      g.rotation.x = targetPitch;
+      g.rotation.z = targetRoll;
+      e.buoyancyReady = true;
+      return;
+    }
+    const alpha = 1 - Math.exp(-BUOYANCY_RESPONSE * Math.max(0, dt));
+    g.position.y = THREE.MathUtils.lerp(g.position.y, targetY, alpha);
+    g.rotation.x = THREE.MathUtils.lerp(g.rotation.x, targetPitch, alpha);
+    g.rotation.z = THREE.MathUtils.lerp(g.rotation.z, targetRoll, alpha);
   }
 
   _fire(e) {
@@ -123,16 +157,43 @@ export class EnemyFleet {
     vel.applyAxisAngle(new THREE.Vector3(1, 0, 0), (Math.random() - 0.5) * j * 2);
     this.projectiles.spawn(best, vel, { team: "enemy" });
     this.effects.muzzleFlash(best, vel);
+    this.onFire(best.clone());
   }
 
   hitTest(proj) {
     for (const e of this.list) {
       if (e.sinking) continue;
-      const r = this.dims.length * 0.5;
-      if (e.group.position.distanceTo(proj.pos) < r) {
-        const normal = proj.pos.clone().sub(e.group.position).setY(0).normalize();
-        return { enemy: e, point: proj.pos.clone(), normal };
+      const d = this.dims;
+      if (e.group.position.distanceTo(proj.pos) > d.length * 1.4) continue;
+
+      e.group.updateMatrixWorld(true);
+      const local = e.group.worldToLocal(proj.pos.clone());
+      const radius = proj.radius || 0;
+      const inRigging =
+        Math.abs(local.x) <= d.beam * 1.7 + radius &&
+        Math.abs(local.z) <= d.length * 0.5 + radius &&
+        local.y >= d.deckY + 0.35 - radius &&
+        local.y <= d.deckY + d.length * 0.9 + radius;
+      if (inRigging) {
+        const normal = proj.vel.clone().normalize().multiplyScalar(-1);
+        return { enemy: e, kind: "sail", point: proj.pos.clone(), normal };
       }
+
+      const inHull =
+        Math.abs(local.x) <= d.beam * 0.62 + radius &&
+        Math.abs(local.z) <= d.length * 0.52 + radius &&
+        local.y >= d.keelY - radius &&
+        local.y <= d.deckY + 0.35 + radius;
+      if (inHull) {
+        const nx = local.x / Math.max(1, d.beam * 0.62);
+        const nz = local.z / Math.max(1, d.length * 0.52);
+        const normal = Math.abs(nx) > Math.abs(nz)
+          ? new THREE.Vector3(Math.sign(nx) || 1, 0, 0)
+          : new THREE.Vector3(0, 0, Math.sign(nz) || 1);
+        normal.transformDirection(e.group.matrixWorld);
+        return { enemy: e, kind: "hull", point: proj.pos.clone(), normal };
+      }
+
     }
     return null;
   }
@@ -143,6 +204,17 @@ export class EnemyFleet {
     e.sinkVel = 2;
     e.list = (Math.random() - 0.5) * 0.5;
     this.killCount++;
+    this.onSunk(e.group.position.clone());
+  }
+
+  damage(e, amount) {
+    if (!e || e.sinking) return false;
+    e.health = Math.max(0, (e.health ?? 100) - amount);
+    if (e.health <= 0) {
+      this.sink(e);
+      return true;
+    }
+    return false;
   }
 
   update(dt, onKilled) {
@@ -151,7 +223,7 @@ export class EnemyFleet {
       this.spawnTimer -= dt;
       if (this.spawnTimer <= 0) {
         this._spawn();
-        this.spawnTimer = 6 + Math.random() * 6;
+        this.spawnTimer = SPAWN_DELAY_MIN + Math.random() * (SPAWN_DELAY_MAX - SPAWN_DELAY_MIN);
       }
     }
 
@@ -179,15 +251,24 @@ export class EnemyFleet {
       while (dy < -Math.PI) dy += Math.PI * 2;
       e.group.rotation.y += THREE.MathUtils.clamp(dy, -0.4 * dt, 0.4 * dt);
       const fwd = new THREE.Vector3(Math.sin(e.group.rotation.y), 0, Math.cos(e.group.rotation.y));
-      const speed = dist > STANDOFF ? 26 : -4;
+      const slowApproach = this.quizMode || this.learningFireMode;
+      const speed = slowApproach ? (dist > STANDOFF ? 10 : 0) : dist > STANDOFF ? 26 : -4;
       e.group.position.addScaledVector(fwd, speed * dt);
 
-      this._buoyancy(e);
+      this._buoyancy(e, dt);
 
       e.reload -= dt;
-      if (e.reload <= 0 && dist < 760) {
-        this._fire(e);
-        e.reload = 4 + Math.random() * 4;
+      const fireRange = this.quizMode ? 900 : 760;
+      if (e.reload <= 0 && dist < fireRange) {
+        if (this.quizMode) {
+          e.reload = QUIZ_RELOAD_MIN + Math.random() * (QUIZ_RELOAD_MAX - QUIZ_RELOAD_MIN);
+        } else if (this.learningFireMode) {
+          this._fire(e);
+          e.reload = LEARNING_RELOAD_MIN + Math.random() * (LEARNING_RELOAD_MAX - LEARNING_RELOAD_MIN);
+        } else {
+          this._fire(e);
+          e.reload = COMBAT_RELOAD_MIN + Math.random() * (COMBAT_RELOAD_MAX - COMBAT_RELOAD_MIN);
+        }
       }
     }
   }
