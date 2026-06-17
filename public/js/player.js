@@ -122,6 +122,7 @@ export class PlayerController {
     this.handCannonCharges = 0;
     this.quizActionPending = false;
     this.fireQuizGrant = null;
+    this.deckFireGrants = new Set();
     this.cursorMode = "camera";
 
     this._ray = new THREE.Raycaster();
@@ -375,6 +376,7 @@ export class PlayerController {
     this.activeCannon = null;
     this.aimInTraverse = false;
     this.fireQuizGrant = null;
+    this.deckFireGrants.clear();
     this.airborne = false;
     this.verticalVelocity = 0;
     this._failedMoveTime = 0;
@@ -460,21 +462,34 @@ export class PlayerController {
   }
 
   _hasFireQuizGrant(kind, cannon = null) {
-    if (!this.fireQuizGrant || this.fireQuizGrant.kind !== kind) return false;
-    return kind !== "deck-cannon" || this.fireQuizGrant.cannon === cannon;
+    if (kind === "deck-cannon") return Boolean(cannon && this.deckFireGrants.has(this._cannonGrantKey(cannon)));
+    return Boolean(this.fireQuizGrant && this.fireQuizGrant.kind === kind);
   }
 
   _consumeFireQuizGrant(kind, cannon = null) {
+    if (kind === "deck-cannon") {
+      if (cannon) this.deckFireGrants.delete(this._cannonGrantKey(cannon));
+      return;
+    }
     if (this._hasFireQuizGrant(kind, cannon)) this.fireQuizGrant = null;
+  }
+
+  _cannonGrantKey(cannon) {
+    return cannon?.id || cannon;
   }
 
   async _ensureFireQuizGrant(kind, context = {}) {
     const cannon = context.cannon || null;
     if (!this.requestActionQuiz || this._hasFireQuizGrant(kind, cannon)) return "ready";
     if (!(await this._gateAction("fire", { source: context.source || kind }))) return "blocked";
+    if (kind === "deck-cannon") {
+      if (cannon) this.deckFireGrants.add(this._cannonGrantKey(cannon));
+      this.onMessage("Р’РµСЂРЅРѕ. РџСѓС€РєР° РіРѕС‚РѕРІР°: РЅР°РІРµРґРё Рё РЅР°Р¶РјРё РІС‹СЃС‚СЂРµР» РµС‰С‘ СЂР°Р·.");
+      return "granted";
+    }
     this.fireQuizGrant = {
       kind,
-      cannon: kind === "deck-cannon" ? cannon : null,
+      cannon: null,
     };
     this.onMessage(
       kind === "deck-cannon"

@@ -6,9 +6,9 @@ import { createWorld } from "./ocean.js?v=20260615-mac-perf-v1";
 import { EffectsSystem } from "./effects.js?v=20260615-mac-perf-v1";
 import { ProjectileSystem } from "./ballistics.js?v=20260603-bonuses-island-v1";
 import { buildPlayerShip, SHIP_DEFAULTS } from "./ship.js?v=20260614-buoyancy-v2";
-import { EnemyFleet } from "./enemy.js?v=20260615-slower-enemy-fire-v1";
-import { PlayerController } from "./player.js?v=20260615-cursor-modes-v1";
-import { DamageControlSystem } from "./damage-control.js?v=20260614-hold-water-v2";
+import { EnemyFleet } from "./enemy.js?v=20260617-hold-safe-v1";
+import { PlayerController } from "./player.js?v=20260617-persistent-cannon-grants-v1";
+import { DamageControlSystem } from "./damage-control.js?v=20260617-bucket-15-v1";
 import { loadAndAnalyzeShip } from "./models.js?v=20260607-assets-fire-v1";
 import { applyCollisionProfile, loadAppliedCollisionProfile } from "./collision-profile.js?v=20260609-remove-hold-helpers-v1";
 import { SailingSystem } from "./sailing.js?v=20260603-bonuses-island-v1";
@@ -110,7 +110,10 @@ export async function startGame(container, hud) {
     questActive: false,
   };
   const sailing = new SailingSystem({ ship, wind, onMessage: (m) => m && setMessage(m) });
-  const getPlayerTarget = () => ({ pos: ship.group.position.clone(), vel: sailing.velocity.clone() });
+  const getPlayerTarget = () => {
+    const insideHold = Boolean(player?.rig && damageControl.isInsideHold?.(player.rig.position));
+    return { pos: ship.group.position.clone(), vel: sailing.velocity.clone(), insideHold };
+  };
   let bonusSystem = null;
   let playerShipSinking = false;
   let playerSinkTimer = 0;

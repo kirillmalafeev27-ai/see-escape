@@ -141,8 +141,9 @@ export class EnemyFleet {
     g.rotation.z = THREE.MathUtils.lerp(g.rotation.z, targetRoll, alpha);
   }
 
-  _fire(e) {
-    const player = this.getPlayerTarget();
+  _fire(e, target = null) {
+    const player = target || this.getPlayerTarget();
+    if (player?.insideHold) return false;
     e.group.updateMatrixWorld(true);
     let best = null, bestDot = -Infinity;
     const toPlayer = this._tmp.copy(player.pos).sub(e.group.position).normalize();
@@ -152,17 +153,18 @@ export class EnemyFleet {
       const dot = dir.dot(toPlayer);
       if (dot > bestDot) { bestDot = dot; best = wp; }
     }
-    if (!best) return;
+    if (!best) return false;
     const aim = player.pos.clone();
     aim.y += 4;
     const vel = solveLaunchVelocity(best, aim, MUZZLE_SPEED, player.vel);
-    if (!vel) return;
+    if (!vel) return false;
     const j = e.accuracy;
     vel.applyAxisAngle(new THREE.Vector3(0, 1, 0), (Math.random() - 0.5) * j * 2);
     vel.applyAxisAngle(new THREE.Vector3(1, 0, 0), (Math.random() - 0.5) * j * 2);
     this.projectiles.spawn(best, vel, { team: "enemy" });
     this.effects.muzzleFlash(best, vel);
     this.onFire(best.clone());
+    return true;
   }
 
   hitTest(proj) {
@@ -267,11 +269,13 @@ export class EnemyFleet {
       if (e.reload <= 0 && dist < fireRange) {
         if (this.quizMode) {
           e.reload = reloadDelay(QUIZ_RELOAD_MIN, QUIZ_RELOAD_MAX);
+        } else if (player?.insideHold) {
+          e.reload = 0.75;
         } else if (this.learningFireMode) {
-          this._fire(e);
+          this._fire(e, player);
           e.reload = reloadDelay(LEARNING_RELOAD_MIN, LEARNING_RELOAD_MAX);
         } else {
-          this._fire(e);
+          this._fire(e, player);
           e.reload = reloadDelay(COMBAT_RELOAD_MIN, COMBAT_RELOAD_MAX);
         }
       }
