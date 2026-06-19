@@ -14,6 +14,9 @@ const publicDir = path.join(__dirname, "public");
 const PORT = Number(process.env.PORT || 4317);
 const HOST = process.env.HOST || "0.0.0.0";
 const JSON_LIMIT = 1024 * 1024;
+const MAX_COOP_PLAYERS = 2;
+const ACTIVE_PLAYER_TTL = 15000;
+const STALE_PLAYER_TTL = 30000;
 const coopRooms = new Map();
 
 const MIME = new Map([
@@ -34,12 +37,23 @@ const COMPRESSIBLE = new Set([".html", ".js", ".css", ".json", ".svg"]);
 const LARGE_ASSET = new Set([".glb", ".gltf", ".bin", ".jpg", ".jpeg", ".png", ".webp"]);
 
 function roomCode() {
-  return Math.random().toString(36).slice(2, 6).toUpperCase();
+  let id = "";
+  do {
+    id = Math.random().toString(36).slice(2, 6).toUpperCase();
+  } while (coopRooms.has(id));
+  return id;
 }
 
-function getCoopRoom(code) {
-  const id = String(code || "").trim().toUpperCase() || roomCode();
+function normalizeRoomId(code) {
+  return String(code || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8);
+}
+
+function getCoopRoom(code, options = {}) {
+  const create = options.create !== false;
+  const id = normalizeRoomId(code) || (create ? roomCode() : "");
+  if (!id) return null;
   if (!coopRooms.has(id)) {
+    if (!create) return null;
     coopRooms.set(id, {
       id,
       players: new Map(),
@@ -53,11 +67,22 @@ function getCoopRoom(code) {
   return coopRooms.get(id);
 }
 
-function publicCoopRoomState(room) {
+function pruneStalePlayers(room, ttl = STALE_PLAYER_TTL) {
   const now = Date.now();
+  for (const [playerId, player] of room.players) {
+    if (now - player.lastSeen > ttl) room.players.delete(playerId);
+  }
+}
+
+function activePlayers(room) {
+  const now = Date.now();
+  return [...room.players.values()].filter((player) => now - player.lastSeen < ACTIVE_PLAYER_TTL);
+}
+
+function publicCoopRoomState(room) {
   return {
     room: room.id,
-    players: [...room.players.values()].filter((player) => now - player.lastSeen < 15000),
+    players: activePlayers(room),
     configs: Object.fromEntries(room.configs.entries()),
   };
 }
@@ -201,8 +226,8 @@ function handleCoopWebSocketUpgrade(req, socket) {
     socket.destroy();
     return true;
   }
-  const room = getCoopRoom(url.searchParams.get("room"));
-  const player = room.players.get(url.searchParams.get("player"));
+  const room = getCoopRoom(url.searchParams.get("room"), { create: false });
+  const player = room?.players.get(url.searchParams.get("player"));
   if (!player) {
     socket.end("HTTP/1.1 404 Not Found\r\n\r\n");
     return true;
@@ -250,9 +275,7 @@ function handleCoopWebSocketUpgrade(req, socket) {
 function cleanupCoopRooms() {
   const now = Date.now();
   for (const [id, room] of coopRooms) {
-    for (const [playerId, player] of room.players) {
-      if (now - player.lastSeen > 30000) room.players.delete(playerId);
-    }
+    pruneStalePlayers(room, STALE_PLAYER_TTL);
     if (!room.players.size && !room.clients.size && !room.wsClients.size && now - room.lastSeen > 300000) {
       coopRooms.delete(id);
     }
@@ -312,10 +335,18 @@ installCoopRoutes(routeApp);
 
 function installCoopRoutes(app) {
   app.post("/api/coop/join", (req, res) => {
-    const room = getCoopRoom(req.body?.room);
+    const requestedRoom = normalizeRoomId(req.body?.room);
+    const create = Boolean(req.body?.create) || !requestedRoom;
+    const room = getCoopRoom(requestedRoom, { create });
+    if (!room) return res.status(404).json({ ok: false, error: "Комната не найдена. Проверь код или попроси первого игрока создать комнату заново." });
+    pruneStalePlayers(room, STALE_PLAYER_TTL);
+    if (room.players.size >= MAX_COOP_PLAYERS) {
+      return res.status(409).json({ ok: false, error: "Комната уже заполнена: максимум 2 игрока." });
+    }
     room.lastSeen = Date.now();
     const playerId = Math.random().toString(36).slice(2, 10);
-    const seat = room.players.size + 1;
+    const usedSeats = new Set([...room.players.values()].map((player) => player.seat));
+    const seat = [1, 2].find((candidate) => !usedSeats.has(candidate)) || room.players.size + 1;
     const colors = ["#3aa0ff", "#5ce58a", "#ffe27a", "#ff8fc7"];
     const color = colors[(seat - 1) % colors.length];
     const player = {
@@ -331,8 +362,17 @@ function installCoopRoutes(app) {
     res.json({ ok: true, room: room.id, playerId, seat, color, state: publicCoopRoomState(room) });
   });
 
+  app.get("/api/coop/room", (req, res) => {
+    const room = getCoopRoom(req.query.room, { create: false });
+    if (!room) return res.status(404).json({ ok: false, error: "room not found" });
+    pruneStalePlayers(room, STALE_PLAYER_TTL);
+    room.lastSeen = Date.now();
+    res.json({ ok: true, state: publicCoopRoomState(room) });
+  });
+
   app.get("/api/coop/events", (req, res) => {
-    const room = getCoopRoom(req.query.room);
+    const room = getCoopRoom(req.query.room, { create: false });
+    if (!room) return res.status(404).end("room not found");
     room.lastSeen = Date.now();
     res.writeHead(200, {
       "Content-Type": "text/event-stream",
@@ -348,8 +388,8 @@ function installCoopRoutes(app) {
   });
 
   app.post("/api/coop/state", (req, res) => {
-    const room = getCoopRoom(req.body?.room);
-    const player = room.players.get(req.body?.playerId);
+    const room = getCoopRoom(req.body?.room, { create: false });
+    const player = room?.players.get(req.body?.playerId);
     if (!player) return res.status(404).json({ ok: false, error: "player not found" });
     player.state = req.body?.state || null;
     player.lastSeen = Date.now();
@@ -359,7 +399,8 @@ function installCoopRoutes(app) {
   });
 
   app.post("/api/coop/config", (req, res) => {
-    const room = getCoopRoom(req.body?.room);
+    const room = getCoopRoom(req.body?.room, { create: false });
+    if (!room) return res.status(404).json({ ok: false, error: "room not found" });
     const key = String(req.body?.key || req.body?.floor || "").trim();
     if (!key) return res.status(400).json({ ok: false, error: "bad config key" });
     if (req.body?.replace || !room.configs.has(key)) {
