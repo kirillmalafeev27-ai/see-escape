@@ -101,6 +101,7 @@ function broadcastCoop(room, event, data) {
 
 function coopWsPayload(event, data) {
   if (event === "config") return { type: "config", ...data, serverTime: Date.now() };
+  if (event === "event") return { type: "event", ...data, serverTime: Date.now() };
   return { type: event, state: data, data, serverTime: Date.now() };
 }
 
@@ -204,8 +205,8 @@ function handleCoopWsMessage(room, player, socket, raw) {
     return;
   }
   if (message.type === "event" && message.name) {
-    broadcastCoopWs(room, {
-      type: "event",
+    broadcastCoop(room, "event", {
+      id: String(message.id || crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`),
       name: String(message.name),
       payload: message.payload || {},
       source: player.id,
@@ -410,6 +411,25 @@ function installCoopRoutes(app) {
       broadcastCoop(room, "room", publicCoopRoomState(room));
     }
     res.json({ ok: true, config: room.configs.get(key) });
+  });
+
+  app.post("/api/coop/event", (req, res) => {
+    const room = getCoopRoom(req.body?.room, { create: false });
+    const player = room?.players.get(req.body?.playerId);
+    if (!player) return res.status(404).json({ ok: false, error: "player not found" });
+    const name = String(req.body?.name || "").trim();
+    if (!name) return res.status(400).json({ ok: false, error: "bad event name" });
+    player.lastSeen = Date.now();
+    room.lastSeen = player.lastSeen;
+    const event = {
+      id: String(req.body?.id || crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`),
+      name,
+      payload: req.body?.payload || {},
+      source: player.id,
+      serverTime: Date.now(),
+    };
+    broadcastCoop(room, "event", event);
+    res.json({ ok: true, event });
   });
 }
 
