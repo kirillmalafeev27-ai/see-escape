@@ -14,7 +14,6 @@ const publicDir = path.join(__dirname, "public");
 const PORT = Number(process.env.PORT || 4317);
 const HOST = process.env.HOST || "0.0.0.0";
 const JSON_LIMIT = 1024 * 1024;
-const MAX_COOP_PLAYERS = 2;
 const ACTIVE_PLAYER_TTL = 15000;
 const STALE_PLAYER_TTL = 30000;
 const coopRooms = new Map();
@@ -341,13 +340,14 @@ function installCoopRoutes(app) {
     const room = getCoopRoom(requestedRoom, { create });
     if (!room) return res.status(404).json({ ok: false, error: "Комната не найдена. Проверь код или попроси первого игрока создать комнату заново." });
     pruneStalePlayers(room, STALE_PLAYER_TTL);
-    if (room.players.size >= MAX_COOP_PLAYERS) {
+    /* Room size is intentionally unlimited; legacy full-room response disabled.
       return res.status(409).json({ ok: false, error: "Комната уже заполнена: максимум 2 игрока." });
-    }
+    */
     room.lastSeen = Date.now();
     const playerId = Math.random().toString(36).slice(2, 10);
     const usedSeats = new Set([...room.players.values()].map((player) => player.seat));
-    const seat = [1, 2].find((candidate) => !usedSeats.has(candidate)) || room.players.size + 1;
+    let seat = 1;
+    while (usedSeats.has(seat)) seat++;
     const colors = ["#3aa0ff", "#5ce58a", "#ffe27a", "#ff8fc7"];
     const color = colors[(seat - 1) % colors.length];
     const player = {
