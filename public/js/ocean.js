@@ -17,12 +17,38 @@ function createPerformanceProfile() {
   const nav = typeof navigator !== "undefined" ? navigator : {};
   const ua = nav.userAgent || "";
   const platform = nav.platform || "";
+  const viewportWidth = typeof window !== "undefined" ? window.innerWidth : 1280;
+  const viewportHeight = typeof window !== "undefined" ? window.innerHeight : 720;
   const isMac = /Macintosh|MacIntel|Mac OS X/i.test(`${ua} ${platform}`);
+  const isIOS =
+    /iPad|iPhone|iPod/i.test(ua) || (platform === "MacIntel" && Number(nav.maxTouchPoints) > 1);
+  const coarsePointer =
+    typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches;
+  const touchDevice = coarsePointer || Number(nav.maxTouchPoints) > 0;
+  const compactViewport = Math.min(viewportWidth, viewportHeight) <= 900;
   const cores = Number(nav.hardwareConcurrency) || 4;
   const memory = Number(nav.deviceMemory) || 4;
   const reducedMotion =
     typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const mobile = touchDevice || compactViewport;
+  const tablet = mobile && Math.min(viewportWidth, viewportHeight) >= 700;
   const lowPower = isMac || cores <= 4 || memory <= 4 || reducedMotion;
+
+  if (mobile) {
+    return {
+      name: tablet ? "tablet-touch" : "mobile-touch",
+      pixelRatioMax: isIOS ? (tablet ? 0.95 : 0.85) : tablet ? 1 : 0.92,
+      pixelRatioFloor: 0.58,
+      waterSegments: tablet ? 88 : 64,
+      waterTextureSize: 256,
+      effectScale: tablet ? 0.52 : 0.42,
+      adaptive: true,
+      stressFps: 34,
+      coolFps: 54,
+      pixelRatioStepDown: 0.16,
+      pixelRatioStepUp: 0.04,
+    };
+  }
 
   return lowPower
     ? {
@@ -33,6 +59,10 @@ function createPerformanceProfile() {
         waterTextureSize: 256,
         effectScale: 0.56,
         adaptive: true,
+        stressFps: 28,
+        coolFps: 50,
+        pixelRatioStepDown: 0.12,
+        pixelRatioStepUp: 0.06,
       }
     : {
         name: "standard",
@@ -42,6 +72,10 @@ function createPerformanceProfile() {
         waterTextureSize: 512,
         effectScale: 1,
         adaptive: true,
+        stressFps: 28,
+        coolFps: 50,
+        pixelRatioStepDown: 0.12,
+        pixelRatioStepUp: 0.06,
       };
 }
 
@@ -372,10 +406,12 @@ export function createWorld(container) {
 
   function tuneForFrameTime(dt) {
     if (!performanceProfile.adaptive) return;
-    if (dt > 1 / 28) {
+    const stressFrameTime = 1 / (performanceProfile.stressFps || 28);
+    const coolFrameTime = 1 / (performanceProfile.coolFps || 50);
+    if (dt > stressFrameTime) {
       frameStressTime += dt;
       frameCoolTime = 0;
-    } else if (dt < 1 / 50) {
+    } else if (dt < coolFrameTime) {
       frameCoolTime += dt;
       frameStressTime = Math.max(0, frameStressTime - dt);
     } else {
@@ -383,10 +419,10 @@ export function createWorld(container) {
       frameCoolTime = Math.max(0, frameCoolTime - dt);
     }
     if (frameStressTime > 0.9) {
-      applyPixelRatio(currentPixelRatio - 0.12);
+      applyPixelRatio(currentPixelRatio - (performanceProfile.pixelRatioStepDown || 0.12));
       frameStressTime = 0;
     } else if (frameCoolTime > 5 && currentPixelRatio < performanceProfile.pixelRatioMax) {
-      applyPixelRatio(currentPixelRatio + 0.06);
+      applyPixelRatio(currentPixelRatio + (performanceProfile.pixelRatioStepUp || 0.06));
       frameCoolTime = 0;
     }
   }

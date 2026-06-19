@@ -90,31 +90,37 @@ export class EnemyFleet {
     this._tmp = new THREE.Vector3();
   }
 
-  _spawn() {
+  _spawn(options = {}) {
     const built = buildEnemyShip(this.dims, this.factory);
     this.scene.add(built.group);
-    const player = this.getPlayerTarget();
-    const ang = Math.random() * Math.PI * 2;
-    const dist = 560 + Math.random() * 200;
-    built.group.position.set(
-      player.pos.x + Math.cos(ang) * dist,
-      0,
-      player.pos.z + Math.sin(ang) * dist
-    );
-    this.list.push({
+    if (options.position) {
+      built.group.position.copy(options.position);
+    } else {
+      const player = this.getPlayerTarget();
+      const ang = Math.random() * Math.PI * 2;
+      const dist = 560 + Math.random() * 200;
+      built.group.position.set(
+        player.pos.x + Math.cos(ang) * dist,
+        0,
+        player.pos.z + Math.sin(ang) * dist
+      );
+    }
+    const entry = {
       group: built.group,
       muzzles: built.muzzles,
-      reload: reloadDelay(INITIAL_RELOAD_MIN, INITIAL_RELOAD_MAX),
-      health: 100,
-      sinking: false,
-      sinkVel: 0,
-      list: 0,
+      reload: Number.isFinite(options.reload) ? options.reload : reloadDelay(INITIAL_RELOAD_MIN, INITIAL_RELOAD_MAX),
+      health: Number.isFinite(options.health) ? options.health : 100,
+      sinking: Boolean(options.sinking),
+      sinkVel: Number(options.sinkVel) || 0,
+      list: Number(options.list) || 0,
       halfL: this.dims.length * 0.42,
       halfW: this.dims.beam * 0.42,
       buoyancyReady: false,
-      accuracy: 0.04 + Math.random() * 0.05,
-    });
-    this.onSpawn(built.group.position.clone());
+      accuracy: Number.isFinite(options.accuracy) ? options.accuracy : 0.04 + Math.random() * 0.05,
+    };
+    this.list.push(entry);
+    if (!options.silent) this.onSpawn(built.group.position.clone());
+    return entry;
   }
 
   _buoyancy(e, dt) {
@@ -222,6 +228,45 @@ export class EnemyFleet {
       return true;
     }
     return false;
+  }
+
+  snapshot(limit = 12) {
+    return this.list.slice(0, limit).map((e) => ({
+      position: { x: e.group.position.x, y: e.group.position.y, z: e.group.position.z },
+      rotation: { x: e.group.rotation.x, y: e.group.rotation.y, z: e.group.rotation.z },
+      reload: e.reload,
+      health: e.health,
+      sinking: e.sinking,
+      sinkVel: e.sinkVel,
+      list: e.list,
+      accuracy: e.accuracy,
+      buoyancyReady: e.buoyancyReady,
+    }));
+  }
+
+  syncFromSnapshot(items = []) {
+    const safeItems = Array.isArray(items) ? items : [];
+    while (this.list.length > safeItems.length) {
+      const enemy = this.list.pop();
+      if (enemy?.group) this.scene.remove(enemy.group);
+    }
+    while (this.list.length < safeItems.length) {
+      this._spawn({ silent: true, position: new THREE.Vector3() });
+    }
+    for (let i = 0; i < safeItems.length; i++) {
+      const item = safeItems[i] || {};
+      const enemy = this.list[i];
+      enemy.group.position.set(item.position?.x || 0, item.position?.y || 0, item.position?.z || 0);
+      enemy.group.rotation.set(item.rotation?.x || 0, item.rotation?.y || 0, item.rotation?.z || 0);
+      enemy.reload = Number.isFinite(item.reload) ? item.reload : enemy.reload;
+      enemy.health = Number.isFinite(item.health) ? item.health : enemy.health;
+      enemy.sinking = Boolean(item.sinking);
+      enemy.sinkVel = Number(item.sinkVel) || 0;
+      enemy.list = Number(item.list) || 0;
+      enemy.accuracy = Number.isFinite(item.accuracy) ? item.accuracy : enemy.accuracy;
+      enemy.buoyancyReady = Boolean(item.buoyancyReady);
+      enemy.group.visible = true;
+    }
   }
 
   update(dt, onKilled) {

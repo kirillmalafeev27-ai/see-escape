@@ -7,18 +7,21 @@ function escapeHtml(value) {
 }
 
 function actionTitle(action) {
+  if (action === "island") return "Задание на острове";
   if (action === "patch") return "Задание перед ремонтом";
   if (action === "fire") return "Задание перед выстрелом";
   return "Задание";
 }
 
 function actionSuccess(action) {
+  if (action === "island") return "Верно. Можно сделать шаг.";
   if (action === "patch") return "Верно. Можно заколотить пробоину.";
   if (action === "fire") return "Верно. Пушка твоя.";
   return "Верно.";
 }
 
 function actionFailure(action) {
+  if (action === "island") return "Неверно. Шаг не сделан.";
   if (action === "patch") return "Неверно. Доска остаётся в руках, пробоина пока открыта.";
   if (action === "fire") return "Неверно. Пушка не стреляет.";
   return "Неверно.";

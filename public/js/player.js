@@ -11,6 +11,10 @@ const PLAYER_MUZZLE_SPEED = 220;
 const GRAPESHOT_MUZZLE_SPEED = 155;
 const WALK_SPEED = 14;
 const LOOK_SENS = 0.0022;
+const TOUCH_LOOK_SENS = 0.0042;
+const TOUCH_JOYSTICK_RADIUS = 58;
+const TOUCH_MOVE_DEADZONE = 0.12;
+const TOUCH_CONTROLS_QUERY = "(pointer: coarse), (max-width: 900px)";
 const RELOAD = 1.8;
 const EYE_HEIGHT = 4.2;
 const PLAYER_RADIUS = 0.85;
@@ -112,6 +116,17 @@ export class PlayerController {
     this.yaw = Math.PI;
     this.pitch = -0.05;
     this.keys = {};
+    this.keyboardKeys = {};
+    this.virtualKeys = {};
+    this.virtualMove = { forward: 0, side: 0 };
+    this.touchControls = null;
+    this.touchMoveId = null;
+    this.touchLookId = null;
+    this.touchLookLast = { x: 0, y: 0 };
+    const coarseInput =
+      typeof matchMedia === "function" && matchMedia(TOUCH_CONTROLS_QUERY).matches;
+    this.isTouchDevice =
+      coarseInput || (typeof navigator !== "undefined" && Number(navigator.maxTouchPoints) > 0);
     this.locked = false;
     this.dragLook = false;
     this.prompt = "";
@@ -193,9 +208,181 @@ export class PlayerController {
     return this.handCannonCharges > 0 && this._hasFireQuizGrant("hand-cannon");
   }
 
+  _setKeyState(code, active, source = "keyboard") {
+    const state = source === "virtual" ? this.virtualKeys : this.keyboardKeys;
+    if (active) state[code] = true;
+    else delete state[code];
+    this.keys[code] = Boolean(this.keyboardKeys[code] || this.virtualKeys[code]);
+  }
+
+  _applyMoveDeadzone(value) {
+    const abs = Math.abs(value);
+    if (abs <= TOUCH_MOVE_DEADZONE) return 0;
+    return Math.sign(value) * THREE.MathUtils.clamp((abs - TOUCH_MOVE_DEADZONE) / (1 - TOUCH_MOVE_DEADZONE), 0, 1);
+  }
+
+  _setVirtualMove(side, forward) {
+    this.virtualMove.side = this._applyMoveDeadzone(THREE.MathUtils.clamp(side, -1, 1));
+    this.virtualMove.forward = this._applyMoveDeadzone(THREE.MathUtils.clamp(forward, -1, 1));
+    this._setKeyState("KeyW", this.virtualMove.forward > 0.18, "virtual");
+    this._setKeyState("KeyS", this.virtualMove.forward < -0.18, "virtual");
+    this._setKeyState("KeyD", this.virtualMove.side > 0.18, "virtual");
+    this._setKeyState("KeyA", this.virtualMove.side < -0.18, "virtual");
+  }
+
+  _resetVirtualMove() {
+    this.virtualMove.forward = 0;
+    this.virtualMove.side = 0;
+    for (const code of ["KeyW", "KeyS", "KeyA", "KeyD"]) {
+      this._setKeyState(code, false, "virtual");
+    }
+    this.touchControls?.stick?.style.setProperty("--stick-x", "0px");
+    this.touchControls?.stick?.style.setProperty("--stick-y", "0px");
+  }
+
+  _touchLookAllowed() {
+    return !this.quizActionPending && !this.questMode && !this.islandQuest?.active;
+  }
+
+  _enterTouchCameraMode() {
+    this.cursorMode = "camera";
+    document.body?.classList.add("camera-mode");
+    document.body?.classList.remove("cursor-mode");
+  }
+
+  _applyTouchLook(dx, dy) {
+    this.yaw += dx * TOUCH_LOOK_SENS;
+    this.pitch -= dy * TOUCH_LOOK_SENS;
+    this.pitch = THREE.MathUtils.clamp(this.pitch, -1.3, 1.3);
+  }
+
+  _createTouchControls() {
+    if (!this.isTouchDevice || typeof document === "undefined") return;
+
+    document.getElementById("mobileControls")?.remove();
+    const root = document.createElement("div");
+    root.id = "mobileControls";
+    root.className = "mobile-controls";
+    root.setAttribute("aria-hidden", "true");
+
+    const stick = document.createElement("div");
+    stick.className = "mobile-stick";
+    const knob = document.createElement("div");
+    knob.className = "mobile-stick-knob";
+    stick.appendChild(knob);
+
+    const lookPad = document.createElement("div");
+    lookPad.className = "mobile-look-pad";
+
+    root.append(stick, lookPad);
+    document.body.appendChild(root);
+    this.touchControls = { root, stick, knob, lookPad };
+    document.body?.classList.add("touch-controls");
+
+    const preventHoldGesture = (e) => e.preventDefault();
+    for (const element of [root, stick, knob, lookPad]) {
+      element?.addEventListener("contextmenu", preventHoldGesture);
+      element?.addEventListener("selectstart", preventHoldGesture);
+      element?.addEventListener("gesturestart", preventHoldGesture);
+    }
+
+    const updateStick = (e) => {
+      const rect = stick.getBoundingClientRect();
+      const cx = rect.left + rect.width / 2;
+      const cy = rect.top + rect.height / 2;
+      let dx = e.clientX - cx;
+      let dy = e.clientY - cy;
+      const distance = Math.hypot(dx, dy);
+      if (distance > TOUCH_JOYSTICK_RADIUS) {
+        const scale = TOUCH_JOYSTICK_RADIUS / distance;
+        dx *= scale;
+        dy *= scale;
+      }
+      stick.style.setProperty("--stick-x", `${dx}px`);
+      stick.style.setProperty("--stick-y", `${dy}px`);
+      this._setVirtualMove(dx / TOUCH_JOYSTICK_RADIUS, -dy / TOUCH_JOYSTICK_RADIUS);
+    };
+
+    const beginMove = (e) => {
+      if (this.touchMoveId !== null || (e.pointerType === "mouse" && e.button !== 0)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      this.touchMoveId = e.pointerId;
+      try {
+        stick.setPointerCapture?.(e.pointerId);
+      } catch (_) {
+        // Some WebKit builds can reject capture during system gestures.
+      }
+      updateStick(e);
+    };
+    const continueMove = (e) => {
+      if (e.pointerId !== this.touchMoveId) return;
+      e.preventDefault();
+      e.stopPropagation();
+      updateStick(e);
+    };
+    const endMove = (e) => {
+      if (e.pointerId !== this.touchMoveId) return;
+      e.preventDefault();
+      e.stopPropagation();
+      this.touchMoveId = null;
+      this._resetVirtualMove();
+    };
+
+    stick.addEventListener("pointerdown", beginMove);
+    stick.addEventListener("pointermove", continueMove);
+    stick.addEventListener("pointerup", endMove);
+    stick.addEventListener("pointercancel", endMove);
+    stick.addEventListener("lostpointercapture", endMove);
+
+    const beginLook = (e) => {
+      if (this.touchLookId !== null || (e.pointerType === "mouse" && e.button !== 0)) return;
+      if (!this._touchLookAllowed()) return;
+      e.preventDefault();
+      e.stopPropagation();
+      this.touchLookId = e.pointerId;
+      this.touchLookLast.x = e.clientX;
+      this.touchLookLast.y = e.clientY;
+      this._enterTouchCameraMode();
+      try {
+        lookPad.setPointerCapture?.(e.pointerId);
+      } catch (_) {
+        // Touch look still works without capture, it just stops on cancel/up.
+      }
+    };
+    const continueLook = (e) => {
+      if (e.pointerId !== this.touchLookId) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const dx = e.clientX - this.touchLookLast.x;
+      const dy = e.clientY - this.touchLookLast.y;
+      this.touchLookLast.x = e.clientX;
+      this.touchLookLast.y = e.clientY;
+      this._applyTouchLook(dx, dy);
+    };
+    const endLook = (e) => {
+      if (e.pointerId !== this.touchLookId) return;
+      e.preventDefault();
+      e.stopPropagation();
+      this.touchLookId = null;
+    };
+
+    lookPad.addEventListener("pointerdown", beginLook);
+    lookPad.addEventListener("pointermove", continueLook);
+    lookPad.addEventListener("pointerup", endLook);
+    lookPad.addEventListener("pointercancel", endLook);
+    lookPad.addEventListener("lostpointercapture", endLook);
+
+    addEventListener("blur", () => {
+      this.touchMoveId = null;
+      this.touchLookId = null;
+      this._resetVirtualMove();
+    });
+  }
+
   _bindInput() {
     addEventListener("keydown", (e) => {
-      this.keys[e.code] = true;
+      this._setKeyState(e.code, true, "keyboard");
       if (e.code === "KeyE" && !e.repeat) {
         this._interact();
         e.preventDefault();
@@ -219,7 +406,7 @@ export class PlayerController {
         this.onMessage(this.cannonMode === "grapeshot" ? "Режим пушек: картечь." : "Режим пушек: ядро.");
       }
     });
-    addEventListener("keyup", (e) => (this.keys[e.code] = false));
+    addEventListener("keyup", (e) => this._setKeyState(e.code, false, "keyboard"));
 
     this.dom.addEventListener("mousedown", (e) => {
       if (this.quizActionPending) {
@@ -249,6 +436,20 @@ export class PlayerController {
       e.stopPropagation();
       this.enterCursorMode();
     };
+    const preventHoldMenu = (e) => e.preventDefault();
+    for (const button of [
+      this.fireButton,
+      this.dumpButton,
+      this.takePlankButton,
+      this.scoopWaterButton,
+      this.patchBreachButton,
+      this.islandTeleportButton,
+      this.jumpButton,
+    ]) {
+      button?.addEventListener("contextmenu", preventHoldMenu);
+      button?.addEventListener("selectstart", preventHoldMenu);
+      button?.addEventListener("gesturestart", preventHoldMenu);
+    }
     this.fireButton?.addEventListener("pointerdown", stopUiPointer);
     this.fireButton?.addEventListener("click", (e) => {
       e.preventDefault();
@@ -311,6 +512,7 @@ export class PlayerController {
       this.pitch -= e.movementY * LOOK_SENS;
       this.pitch = THREE.MathUtils.clamp(this.pitch, -1.3, 1.3);
     });
+    this._createTouchControls();
   }
 
   _findNearbyCannon() {
@@ -1000,8 +1202,10 @@ export class PlayerController {
     }
 
     // movement on the deck plane (ship-local x/z)
-    const f = (this.keys["KeyW"] ? 1 : 0) - (this.keys["KeyS"] ? 1 : 0);
-    const s = (this.keys["KeyD"] ? 1 : 0) - (this.keys["KeyA"] ? 1 : 0);
+    const keyboardForward = (this.keyboardKeys["KeyW"] ? 1 : 0) - (this.keyboardKeys["KeyS"] ? 1 : 0);
+    const keyboardSide = (this.keyboardKeys["KeyD"] ? 1 : 0) - (this.keyboardKeys["KeyA"] ? 1 : 0);
+    const f = THREE.MathUtils.clamp(keyboardForward + this.virtualMove.forward, -1, 1);
+    const s = THREE.MathUtils.clamp(keyboardSide + this.virtualMove.side, -1, 1);
     if (!this.sailing?.controlling && (f || s)) {
       const fwd = new THREE.Vector3(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
       const right = new THREE.Vector3(Math.cos(this.yaw), 0, -Math.sin(this.yaw));

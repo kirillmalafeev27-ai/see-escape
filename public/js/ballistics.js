@@ -48,6 +48,51 @@ export class ProjectileSystem {
     this.list.splice(i, 1);
   }
 
+  snapshot(limit = 72) {
+    return this.list.slice(0, limit).map((p) => ({
+      pos: { x: p.pos.x, y: p.pos.y, z: p.pos.z },
+      vel: { x: p.vel.x, y: p.vel.y, z: p.vel.z },
+      team: p.team,
+      radius: p.radius,
+      ttl: p.ttl,
+      kind: p.kind,
+      damage: p.damage,
+    }));
+  }
+
+  syncFromSnapshot(items = []) {
+    const safeItems = Array.isArray(items) ? items : [];
+    while (this.list.length > safeItems.length) {
+      const index = this.list.length - 1;
+      this._retire(this.list[index], index);
+    }
+    for (let i = 0; i < safeItems.length; i++) {
+      const item = safeItems[i] || {};
+      const pos = new THREE.Vector3(item.pos?.x || 0, item.pos?.y || 0, item.pos?.z || 0);
+      const vel = new THREE.Vector3(item.vel?.x || 0, item.vel?.y || 0, item.vel?.z || 0);
+      let projectile = this.list[i];
+      if (!projectile) {
+        projectile = this.spawn(pos, vel, {
+          team: item.team || "enemy",
+          radius: Number(item.radius) || 1.4,
+          ttl: Number(item.ttl) || 1,
+          kind: item.kind || "round",
+          damage: Number(item.damage) || 100,
+          coopRemote: true,
+        });
+      }
+      projectile.pos.copy(pos);
+      projectile.vel.copy(vel);
+      projectile.team = item.team || projectile.team;
+      projectile.radius = Number(item.radius) || projectile.radius;
+      projectile.ttl = Number.isFinite(item.ttl) ? item.ttl : projectile.ttl;
+      projectile.kind = item.kind || projectile.kind;
+      projectile.damage = Number(item.damage) || projectile.damage;
+      projectile.mesh.visible = true;
+      projectile.mesh.position.copy(projectile.pos);
+    }
+  }
+
   // env: { wind:Vector3, sampleWaveHeight(x,z), hitTest(proj)->hit|null,
   //        onHit(proj,hit), onWater(proj,point) }
   update(dt, env) {

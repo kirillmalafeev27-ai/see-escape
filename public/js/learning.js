@@ -120,6 +120,8 @@
   ];
 
   const STORAGE_KEY = 'see-escape.learning.v2';
+  const POOL_STORAGE_KEY = 'see-escape.quiz.pool.v1';
+  const COOP_DECK_KEY = 'quiz-deck';
   const LEGACY_STORAGE_KEY = 'mosty.learning.v1';
   const DEFAULT_GRAMMAR_TOPIC = 'Präsens';
   const DEFAULT_SLOTS = ['Präsens', 'Akkusativ', 'Perfekt', 'Dativ', 'Wortstellung im Nebensatz'];
@@ -225,14 +227,59 @@
     }
   }
 
+  function settingsSignature(settings) {
+    return [
+      settings.level || '',
+      settings.lexicalTopic || '',
+      normalizeTopic(settings.grammarTopic || DEFAULT_GRAMMAR_TOPIC),
+    ].join('|');
+  }
+
+  function loadPoolSnapshot(settings) {
+    try {
+      const saved = JSON.parse(localStorage.getItem(POOL_STORAGE_KEY) || '{}');
+      if (saved.signature !== settingsSignature(settings)) return null;
+      if (Date.now() - Number(saved.savedAt || 0) > 24 * 60 * 60 * 1000) return null;
+      const generatedPools = Object.create(null);
+      for (const [key, value] of Object.entries(saved.generatedPools || {})) {
+        if (!Array.isArray(value)) continue;
+        const valid = value.filter(validRawQuestion);
+        if (valid.length) generatedPools[key] = valid;
+      }
+      return { generatedPools };
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function savePoolSnapshot(settings, generatedPools) {
+    try {
+      const snapshot = {};
+      for (const [key, value] of Object.entries(generatedPools || {})) {
+        if (!Array.isArray(value) || !value.length) continue;
+        snapshot[key] = value.filter(validRawQuestion).map((question) => ({ ...question }));
+      }
+      localStorage.setItem(POOL_STORAGE_KEY, JSON.stringify({
+        signature: settingsSignature(settings),
+        savedAt: Date.now(),
+        generatedPools: snapshot,
+      }));
+    } catch (_) {
+      // Private mode / quota errors are harmless here.
+    }
+  }
+
   class QuestionBank {
     constructor() {
       this.settings = loadSettings();
+      const savedPoolSnapshot = loadPoolSnapshot(this.settings);
       this.fallbackPool = shuffle(GERMAN_QUESTION_POOL);
       this.audioFallbackPool = shuffle(AUDIO_QUESTION_POOL);
       this.fallbackCursor = 0;
       this.audioCursor = 0;
-      this.generatedPools = Object.create(null);
+      this.generatedPools = savedPoolSnapshot?.generatedPools || Object.create(null);
+      this.sharedDeck = null;
+      this.sharedDeckSignature = '';
       this.fetching = Object.create(null);
       this.usedDisplays = Object.create(null);
       this.generationAllowed = false;
@@ -243,12 +290,27 @@
     }
 
     configure(next) {
+      const previousSignature = settingsSignature(this.settings);
       this.settings = { ...this.settings, ...next };
       this.settings.mode = 'grammar';
       this.settings.grammarTopic = normalizeTopic(this.settings.grammarTopic || DEFAULT_GRAMMAR_TOPIC);
       this.settings.grammarSlots = (this.settings.grammarSlots || DEFAULT_SLOTS).map((topic, i) => normalizeTopic(topic || DEFAULT_SLOTS[i % DEFAULT_SLOTS.length]));
+      if (settingsSignature(this.settings) !== previousSignature) {
+        this.generatedPools = Object.create(null);
+        this.usedDisplays = Object.create(null);
+        this.sharedDeck = null;
+        this.sharedDeckSignature = '';
+      }
       saveSettings(this.settings);
       this.renderSettingsMenu();
+      window.SeaCoop?.publishQuizSettings?.();
+      if (window.SeaCoop?.enabled && window.SeaCoop.isHost) {
+        window.SeaCoop.publishConfig?.(COOP_DECK_KEY, {
+          signature: settingsSignature(this.settings),
+          settings: window.getSeaQuizSettings?.(),
+          questions: [],
+        }, { replace: true });
+      }
     }
 
     async checkStatus() {
@@ -273,6 +335,8 @@
     }
 
     pickGrammarQuestion(context) {
+      const shared = this.sharedQuestion(context.floor || 1);
+      if (shared) return shared;
       const slot = this.slotForBridge(context.floor || 0);
       const generated = this.takeFromPool(this.slotKey(slot), slot);
       if (this.generationAllowed) this.ensurePool(slot);
@@ -295,19 +359,41 @@
       await this.statusPromise;
       this.generationAllowed = true;
       this.settings.mode = 'grammar';
+      const floors = Math.max(1, Math.min(20, Number(options.floors) || 8));
+      const startFloor = Math.max(1, Number(options.startFloor) || 1);
+      const slot = this.slotForBridge(startFloor);
+      if (window.SeaCoop?.enabled && !window.SeaCoop.isHost) {
+        window.SeaCoop.updateUi?.("Ждём общие задания от капитана комнаты...", "warn");
+        const deck = await this.waitForSharedDeck(floors, 12000);
+        if (deck?.length) return { ok: true, generated: true, shared: true };
+        const error = new Error("Общие задания ещё не готовы. Пусть первый игрок нажмёт старт и подготовит колоду.");
+        error.sharedDeckPending = true;
+        window.SeaCoop.updateUi?.(error.message, "warn");
+        throw error;
+      }
       if (!this.status.generationConfigured) {
+        this.seedFallbackPool(slot, floors);
+        this.buildSharedDeck(slot, floors);
+        this.publishSharedDeck(floors, startFloor);
+        this.saveRestartPoolSnapshot();
         this.renderSettingsMenu();
         return { ok: true, generated: false };
       }
 
-      const floors = Math.max(1, Math.min(20, Number(options.floors) || 8));
-      const startFloor = Math.max(1, Number(options.startFloor) || 1);
       this.preparing = true;
       this.renderSettingsMenu();
       try {
-        const slot = this.slotForBridge(startFloor);
         const pool = await this.ensurePool(slot, floors, floors);
-        if ((pool?.length || 0) < floors) throw new Error(`AI questions are not ready for ${slot.grammarTopic}`);
+        if ((pool?.length || 0) < floors) {
+          this.seedFallbackPool(slot, floors);
+          this.buildSharedDeck(slot, floors);
+          this.publishSharedDeck(floors, startFloor);
+          this.saveRestartPoolSnapshot();
+          return { ok: true, generated: false };
+        }
+        this.buildSharedDeck(slot, floors);
+        this.publishSharedDeck(floors, startFloor);
+        this.saveRestartPoolSnapshot();
         return { ok: true, generated: true };
       } finally {
         this.preparing = false;
@@ -327,6 +413,104 @@
 
     audioKey() {
       return `audio:${this.settings.level}:${this.settings.lexicalTopic}`;
+    }
+
+    saveRestartPoolSnapshot() {
+      savePoolSnapshot(this.settings, this.generatedPools);
+    }
+
+    sharedQuestion(floor = 1) {
+      if (!this.sharedDeck?.length) return null;
+      const index = Math.max(0, Math.min(this.sharedDeck.length - 1, Number(floor || 1) - 1));
+      const question = this.sharedDeck[index];
+      return question ? JSON.parse(JSON.stringify(question)) : null;
+    }
+
+    buildSharedDeck(slot, count = 15) {
+      const key = this.slotKey(slot);
+      if ((this.generatedPools[key]?.length || 0) < count) this.seedFallbackPool(slot, count);
+      const rawQuestions = (this.generatedPools[key] || []).slice(0, count);
+      this.sharedDeck = rawQuestions.map((raw) => this.formatGrammarQuestion(raw, slot, true, key));
+      this.sharedDeckSignature = settingsSignature(this.settings);
+      return this.sharedDeck;
+    }
+
+    publishSharedDeck(floors = 15, startFloor = 1) {
+      if (!window.SeaCoop?.enabled || !window.SeaCoop.isHost || !this.sharedDeck?.length) return;
+      window.SeaCoop.publishConfig?.(COOP_DECK_KEY, {
+        signature: this.sharedDeckSignature || settingsSignature(this.settings),
+        settings: window.getSeaQuizSettings?.(),
+        floors,
+        startFloor,
+        questions: this.sharedDeck,
+      }, { replace: true });
+    }
+
+    applySharedDeck(config = {}) {
+      if (!Array.isArray(config.questions) || !config.questions.length) return false;
+      if (config.settings) {
+        const next = {};
+        if (LANGUAGE_LEVELS.includes(config.settings.level)) next.level = config.settings.level;
+        const grammarTopic = normalizeTopic(config.settings.grammarTopic);
+        if (GRAMMAR_TOPICS.includes(grammarTopic)) next.grammarTopic = grammarTopic;
+        if (LEXICAL_TOPICS.includes(config.settings.lexicalTopic)) next.lexicalTopic = config.settings.lexicalTopic;
+        if (Object.keys(next).length) {
+          const previousSignature = settingsSignature(this.settings);
+          this.settings = { ...this.settings, ...next, mode: 'grammar' };
+          if (settingsSignature(this.settings) !== previousSignature) {
+            this.generatedPools = Object.create(null);
+            this.usedDisplays = Object.create(null);
+          }
+          saveSettings(this.settings);
+        }
+      }
+      const valid = config.questions
+        .map((question) => {
+          const choices = Array.isArray(question?.choices) ? question.choices : [];
+          const correctIndex = Number.isInteger(question?.correctIndex) ? question.correctIndex : -1;
+          if (!choices.length || correctIndex < 0 || correctIndex >= choices.length) return null;
+          return JSON.parse(JSON.stringify({ ...question, choices, correctIndex }));
+        })
+        .filter(Boolean);
+      if (!valid.length) return false;
+      this.sharedDeck = valid;
+      this.sharedDeckSignature = config.signature || settingsSignature(this.settings);
+      this.generationAllowed = true;
+      this.renderSettingsMenu();
+      return true;
+    }
+
+    waitForSharedDeck(count = 1, timeoutMs = 8000) {
+      const existing = window.SeaCoop?.configForKey?.(COOP_DECK_KEY);
+      if (existing) this.applySharedDeck(existing);
+      if ((this.sharedDeck?.length || 0) >= count) return Promise.resolve(this.sharedDeck);
+      return new Promise((resolve) => {
+        const start = Date.now();
+        const timer = setInterval(() => {
+          const config = window.SeaCoop?.configForKey?.(COOP_DECK_KEY);
+          if (config) this.applySharedDeck(config);
+          if ((this.sharedDeck?.length || 0) >= count || Date.now() - start >= timeoutMs) {
+            clearInterval(timer);
+            resolve(this.sharedDeck || null);
+          }
+        }, 80);
+      });
+    }
+
+    seedFallbackPool(slot, minCount = 1) {
+      const key = this.slotKey(slot);
+      if ((this.generatedPools[key]?.length || 0) >= minCount) return this.generatedPools[key];
+      const maxRank = LEVEL_RANK[this.settings.level] || LEVEL_RANK.A2;
+      const leveled = this.fallbackPool.filter((question) => (LEVEL_RANK[question.level] || 1) <= maxRank);
+      const topical = leveled.filter((question) => sameTopic(question.topic, slot.grammarTopic));
+      const source = shuffle(topical.length ? topical : (leveled.length ? leveled : this.fallbackPool));
+      if (!source.length) return this.generatedPools[key] || [];
+      const next = [...(this.generatedPools[key] || [])];
+      for (let i = 0; next.length < minCount; i += 1) {
+        next.push({ ...source[i % source.length] });
+      }
+      this.generatedPools[key] = next;
+      return next;
     }
 
     takeFromPool(key, slot) {
@@ -364,6 +548,7 @@
     }
 
     poolHasQuestion(context = {}) {
+      if (this.sharedDeck?.length) return true;
       if (!this.generationAllowed) return true;
       if (!this.status.generationConfigured) return true;
       const key = this.slotKey(this.slotForBridge(context.floor || 0));
@@ -371,6 +556,7 @@
     }
 
     async ensureQuestionAvailable(context = {}) {
+      if (this.sharedDeck?.length) return;
       if (!this.generationAllowed) return;
       if (!this.status.generationConfigured) return;
       const slot = this.slotForBridge(context.floor || 0);
@@ -681,6 +867,21 @@
   window.pickQuestion = (cat, context) => bank.pickQuestion(cat, context);
   window.prepareMostyQuiz = (options) => bank.prepareForGame(options);
   window.prepareSeaQuiz = (options) => bank.prepareForGame(options);
+  window.preserveSeaQuizPool = () => bank.saveRestartPoolSnapshot();
+  window.getSeaQuizSettings = () => ({
+    level: bank.settings.level,
+    lexicalTopic: bank.settings.lexicalTopic,
+    grammarTopic: bank.settings.grammarTopic,
+  });
+  window.applySeaQuizSettings = (settings = {}) => {
+    const next = {};
+    if (LANGUAGE_LEVELS.includes(settings.level)) next.level = settings.level;
+    const grammarTopic = normalizeTopic(settings.grammarTopic);
+    if (GRAMMAR_TOPICS.includes(grammarTopic)) next.grammarTopic = grammarTopic;
+    if (LEXICAL_TOPICS.includes(settings.lexicalTopic)) next.lexicalTopic = settings.lexicalTopic;
+    if (Object.keys(next).length) bank.configure(next);
+  };
+  window.applySeaQuizDeck = (config) => bank.applySharedDeck(config);
   window.releaseQuizQuestion = (question) => bank.releaseQuestion(question);
   window.quizPoolHasQuestion = (context) => bank.poolHasQuestion(context);
   window.quizEnsureQuestionAvailable = (context) => bank.ensureQuestionAvailable(context);

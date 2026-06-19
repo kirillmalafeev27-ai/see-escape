@@ -2,23 +2,80 @@
 // the waves), the player's aimable cannons, an AI enemy fleet trading
 // realistic cannonball fire, wood-debris impacts, and the HUD/main loop.
 import * as THREE from "three";
-import { createWorld } from "./ocean.js?v=20260615-mac-perf-v1";
+import { createWorld } from "./ocean.js?v=20260619-mobile-optim-v1";
 import { EffectsSystem } from "./effects.js?v=20260615-mac-perf-v1";
-import { ProjectileSystem } from "./ballistics.js?v=20260603-bonuses-island-v1";
+import { ProjectileSystem } from "./ballistics.js?v=20260617-super-coop-v1";
 import { buildPlayerShip, SHIP_DEFAULTS } from "./ship.js?v=20260614-buoyancy-v2";
-import { EnemyFleet } from "./enemy.js?v=20260617-hold-safe-v1";
-import { PlayerController } from "./player.js?v=20260617-persistent-cannon-grants-v1";
+import { EnemyFleet } from "./enemy.js?v=20260617-super-coop-v1";
+import { PlayerController } from "./player.js?v=20260619-mobile-controls-v1";
 import { DamageControlSystem } from "./damage-control.js?v=20260617-bucket-15-v1";
 import { loadAndAnalyzeShip } from "./models.js?v=20260607-assets-fire-v1";
 import { applyCollisionProfile, loadAppliedCollisionProfile } from "./collision-profile.js?v=20260609-remove-hold-helpers-v1";
 import { SailingSystem } from "./sailing.js?v=20260603-bonuses-island-v1";
 import { TreasureSystem } from "./treasure.js?v=20260603-bonuses-island-v1";
-import { IslandFortress } from "./island.js?v=20260615-lazy-island-v1";
+import { IslandFortress } from "./island.js?v=20260617-super-coop-v1";
 import { BonusSystem } from "./bonuses.js?v=20260615-clickable-bonuses-v1";
-import { IslandQuestSystem } from "./island-quest.js?v=20260611-audio-guide-v1";
+import { IslandQuestSystem } from "./island-quest.js?v=20260617-facing-island-controls-v1";
 import { applyCannonLayout, loadCannonLayout } from "./cannon-layout.js?v=20260609-default-profile-v2";
 import { AudioGuide } from "./audio-guide.js?v=20260615-once-hints-v1";
-import { ActionQuizGate } from "./action-quiz.js?v=20260615-clickable-quiz-v1";
+import { ActionQuizGate } from "./action-quiz.js?v=20260617-island-action-quiz-v1";
+
+function playerLabelTexture(text, color = "#5ce58a") {
+  const canvas = document.createElement("canvas");
+  canvas.width = 256;
+  canvas.height = 96;
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "rgba(4, 18, 28, 0.82)";
+  ctx.fillRect(8, 12, canvas.width - 16, canvas.height - 24);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 5;
+  ctx.strokeRect(8, 12, canvas.width - 16, canvas.height - 24);
+  ctx.fillStyle = "#f7fbff";
+  ctx.font = "800 42px Segoe UI, system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(text, canvas.width / 2, canvas.height / 2 + 2);
+  return new THREE.CanvasTexture(canvas);
+}
+
+function makeRemotePlayerMesh(color = "#5ce58a", label = "P2") {
+  const parsedColor = new THREE.Color(color || "#5ce58a");
+  const group = new THREE.Group();
+  group.name = `CoopRemotePlayer_${label}`;
+
+  const body = new THREE.Mesh(
+    new THREE.CapsuleGeometry(0.42, 1.05, 6, 14),
+    new THREE.MeshStandardMaterial({
+      color: parsedColor,
+      roughness: 0.5,
+      metalness: 0.08,
+      emissive: parsedColor,
+      emissiveIntensity: 0.08,
+    })
+  );
+  body.position.y = 0.85;
+  group.add(body);
+
+  const ring = new THREE.Mesh(
+    new THREE.TorusGeometry(0.62, 0.045, 8, 36),
+    new THREE.MeshBasicMaterial({ color: parsedColor, transparent: true, opacity: 0.76 })
+  );
+  ring.position.y = 0.08;
+  ring.rotation.x = Math.PI / 2;
+  group.add(ring);
+
+  const labelSprite = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: playerLabelTexture(label, `#${parsedColor.getHexString()}`),
+    depthTest: false,
+    depthWrite: false,
+  }));
+  labelSprite.position.y = 2.05;
+  labelSprite.scale.set(1.45, 0.55, 1);
+  labelSprite.renderOrder = 1000;
+  group.add(labelSprite);
+
+  return group;
+}
 
 export async function startGame(container, hud) {
   const world = createWorld(container);
@@ -97,6 +154,10 @@ export async function startGame(container, hud) {
 
   const getEnv = () => ({ wind, sampleWaveHeight });
   const state = { score: 0, treasures: 0, over: false, bonuses: {} };
+  const coop = window.SeaCoop || null;
+  const coopMeshes = new Map();
+  let coopWorldSeq = 0;
+  let coopLastAppliedWorldSeq = 0;
   const audioState = {
     prompt: "",
     flags: new Map(),
@@ -111,8 +172,27 @@ export async function startGame(container, hud) {
   };
   const sailing = new SailingSystem({ ship, wind, onMessage: (m) => m && setMessage(m) });
   const getPlayerTarget = () => {
-    const insideHold = Boolean(player?.rig && damageControl.isInsideHold?.(player.rig.position));
+    const localInsideHold = Boolean(player?.rig && damageControl.isInsideHold?.(player.rig.position));
+    const insideHold = localInsideHold && !coop?.enabled;
     return { pos: ship.group.position.clone(), vel: sailing.velocity.clone(), insideHold };
+  };
+  const baseProjectileSpawn = projectiles.spawn.bind(projectiles);
+  projectiles.spawn = (origin, velocity, options = {}) => {
+    const projectile = baseProjectileSpawn(origin, velocity, options);
+    if (coop?.enabled && !options.coopRemote && (options.team || "player") === "player") {
+      coop.publishEvent?.("projectile", {
+        origin: vecPayload(origin),
+        velocity: vecPayload(velocity),
+        options: {
+          team: options.team || "player",
+          radius: options.radius || 1.4,
+          ttl: options.ttl || 8,
+          kind: options.kind || "round",
+          damage: options.damage || 100,
+        },
+      });
+    }
+    return projectile;
   };
   let bonusSystem = null;
   let playerShipSinking = false;
@@ -177,6 +257,7 @@ export async function startGame(container, hud) {
     hud,
     sampleWaveHeight,
     raiderShipFactory: enemyFactory,
+    requestActionQuiz: (action, context) => actionQuiz.request(action, context),
     onMessage: (m) => m && setMessage(m),
     onComplete: () => {
       state.treasures += 3;
@@ -388,6 +469,148 @@ export async function startGame(container, hud) {
     audioState.questActive = Boolean(islandQuest.active);
   }
 
+  function vecPayload(v) {
+    return { x: v.x, y: v.y, z: v.z };
+  }
+
+  function vecFromPayload(v, fallback = new THREE.Vector3()) {
+    return new THREE.Vector3(
+      Number.isFinite(v?.x) ? v.x : fallback.x,
+      Number.isFinite(v?.y) ? v.y : fallback.y,
+      Number.isFinite(v?.z) ? v.z : fallback.z
+    );
+  }
+
+  function coopGuestAuthoritative() {
+    return Boolean(coop?.enabled && !coop.isHost);
+  }
+
+  function serializeCoopWorld() {
+    const dc = damageControl.getState?.() || {};
+    return {
+      seq: ++coopWorldSeq,
+      ship: {
+        position: vecPayload(ship.group.position),
+        rotation: { x: ship.group.rotation.x, y: ship.group.rotation.y, z: ship.group.rotation.z },
+      },
+      sailing: {
+        throttle: sailing.throttle,
+        rudder: sailing.rudder,
+        speed: sailing.speed,
+        velocity: vecPayload(sailing.velocity),
+        anchored: sailing.anchored,
+      },
+      wind: vecPayload(wind),
+      score: state.score,
+      treasures: state.treasures,
+      over: state.over,
+      playerShipSinking,
+      playerSinkTimer,
+      flood: dc.waterLevel || 0,
+      enemies: fleet.snapshot?.() || [],
+      projectiles: projectiles.snapshot?.() || [],
+      island: island.snapshot?.() || {},
+    };
+  }
+
+  function applyCoopWorld(worldState = {}) {
+    if (!worldState || !coopGuestAuthoritative()) return;
+    const seq = Number(worldState.seq) || 0;
+    if (seq && seq <= coopLastAppliedWorldSeq) return;
+    if (seq) coopLastAppliedWorldSeq = seq;
+
+    const shipState = worldState.ship || {};
+    ship.group.position.copy(vecFromPayload(shipState.position, ship.group.position));
+    if (shipState.rotation) {
+      ship.group.rotation.x = Number.isFinite(shipState.rotation.x) ? shipState.rotation.x : ship.group.rotation.x;
+      ship.group.rotation.y = Number.isFinite(shipState.rotation.y) ? shipState.rotation.y : ship.group.rotation.y;
+      ship.group.rotation.z = Number.isFinite(shipState.rotation.z) ? shipState.rotation.z : ship.group.rotation.z;
+    }
+    ship.group.updateMatrixWorld(true);
+
+    const sailingState = worldState.sailing || {};
+    sailing.velocity.copy(vecFromPayload(sailingState.velocity, sailing.velocity));
+    if (Number.isFinite(sailingState.throttle)) sailing.throttle = sailingState.throttle;
+    if (Number.isFinite(sailingState.rudder)) sailing.rudder = sailingState.rudder;
+    if (Number.isFinite(sailingState.speed)) sailing.speed = sailingState.speed;
+    sailing.anchored = Boolean(sailingState.anchored);
+    wind.copy(vecFromPayload(worldState.wind, wind));
+
+    if (Number.isFinite(worldState.score)) state.score = worldState.score;
+    if (Number.isFinite(worldState.treasures)) state.treasures = worldState.treasures;
+    if (Number.isFinite(worldState.flood)) damageControl.waterLevel = worldState.flood;
+    playerShipSinking = Boolean(worldState.playerShipSinking);
+    if (Number.isFinite(worldState.playerSinkTimer)) playerSinkTimer = worldState.playerSinkTimer;
+    const wasOver = state.over;
+    state.over = Boolean(worldState.over);
+    if (state.over && !wasOver) hud.gameover.style.display = "flex";
+
+    fleet.syncFromSnapshot?.(worldState.enemies || []);
+    projectiles.syncFromSnapshot?.(worldState.projectiles || []);
+    island.syncFromSnapshot?.(worldState.island || {});
+  }
+
+  coop?.onEvent?.((event) => {
+    if (event.name !== "projectile" || event.source === coop.playerId) return;
+    const payload = event.payload || {};
+    const origin = vecFromPayload(payload.origin);
+    const velocity = vecFromPayload(payload.velocity);
+    projectiles.spawn(origin, velocity, { ...(payload.options || {}), coopRemote: true });
+  });
+
+  function updateCoop(dt) {
+    if (!coop?.enabled || !player) {
+      for (const mesh of coopMeshes.values()) mesh.visible = false;
+      return;
+    }
+
+    const pose = player.captureWorldPose();
+    const localInsideHold = Boolean(damageControl.isInsideHold?.(player.rig.position));
+    const payload = {
+      position: vecPayload(pose.position),
+      yaw: pose.yaw,
+      pitch: pose.pitch,
+      ship: {
+        position: vecPayload(ship.group.position),
+        yaw: ship.group.rotation.y,
+        velocity: vecPayload(sailing.velocity),
+      },
+      insideHold: localInsideHold,
+      score: state.score,
+      treasures: state.treasures,
+      flood: damageControl.getState?.().waterLevel ?? 0,
+      over: state.over,
+      islandQuest: Boolean(islandQuest.active),
+      t: Date.now(),
+    };
+    if (coop.isHost) payload.world = serializeCoopWorld();
+    coop.publishState(payload);
+
+    const alive = new Set();
+    for (const playerInfo of coop.peers()) {
+      const remote = playerInfo.state || {};
+      if (!coop.isHost && playerInfo.seat === 1 && remote.world) {
+        applyCoopWorld(remote.world);
+      }
+      const pos = remote.position;
+      if (!pos || !Number.isFinite(pos.x) || !Number.isFinite(pos.y) || !Number.isFinite(pos.z)) continue;
+      alive.add(playerInfo.id);
+      let mesh = coopMeshes.get(playerInfo.id);
+      if (!mesh) {
+        mesh = makeRemotePlayerMesh(playerInfo.color || "#5ce58a", `P${playerInfo.seat || 2}`);
+        scene.add(mesh);
+        coopMeshes.set(playerInfo.id, mesh);
+      }
+      mesh.position.set(pos.x, pos.y, pos.z);
+      mesh.rotation.y = Number.isFinite(remote.yaw) ? remote.yaw : 0;
+      mesh.visible = true;
+      mesh.scale.setScalar(remote.insideHold ? 0.82 : 1);
+    }
+    for (const [id, mesh] of coopMeshes) {
+      if (!alive.has(id)) mesh.visible = false;
+    }
+  }
+
   addEventListener("keydown", (e) => {
     if (e.code === "KeyR" && state.over) location.reload();
   });
@@ -414,10 +637,13 @@ export async function startGame(container, hud) {
         ship.group.updateMatrixWorld(true);
         effects.update(dt);
         updateHud(dt);
+        updateCoop(dt);
         if (!sinkingOverlayShown && playerSinkTimer > 4.2) {
           sinkingOverlayShown = true;
           hud.gameover.style.display = "flex";
         }
+      } else {
+        updateCoop(dt);
       }
       renderer.render(scene, camera);
       return;
@@ -425,9 +651,11 @@ export async function startGame(container, hud) {
     if (!state.over) {
       if (bonusSystem?.active) {
         updateHud(dt);
+        updateCoop(dt);
         renderer.render(scene, camera);
         return;
       }
+      const coopGuestWorld = coopGuestAuthoritative();
       advanceTime(dt);
       const waveTarget = islandQuest.active ? 0.18 : 1;
       const currentWave = world.getWaveHeightMultiplier?.() ?? 1;
@@ -435,33 +663,42 @@ export async function startGame(container, hud) {
         THREE.MathUtils.lerp(currentWave, waveTarget, 1 - Math.exp(-2.4 * dt))
       );
 
-      windTimer -= dt;
-      if (windTimer <= 0) {
-        windTarget.set((Math.random() - 0.5) * 10, 0, (Math.random() - 0.5) * 10);
-        windTimer = 5 + Math.random() * 5;
-      }
-      wind.lerp(windTarget, 1 - Math.exp(-0.4 * dt));
+      if (!coopGuestWorld) {
+        windTimer -= dt;
+        if (windTimer <= 0) {
+          windTarget.set((Math.random() - 0.5) * 10, 0, (Math.random() - 0.5) * 10);
+          windTimer = 5 + Math.random() * 5;
+        }
+        wind.lerp(windTarget, 1 - Math.exp(-0.4 * dt));
 
-      sailing.update(dt, player.keys);
-      updateShipQuietWaterZone(playerInsideHold);
-      ship.applyBuoyancy(sampleWaveHeight, dt, damageControl.getFloodSinkOffset?.() || 0, world.sampleWaveFrame);
-      ship.group.updateMatrixWorld(true);
+        sailing.update(dt, player.keys);
+        updateShipQuietWaterZone(playerInsideHold);
+        ship.applyBuoyancy(sampleWaveHeight, dt, damageControl.getFloodSinkOffset?.() || 0, world.sampleWaveFrame);
+        ship.group.updateMatrixWorld(true);
+      } else {
+        updateShipQuietWaterZone(playerInsideHold);
+        ship.group.updateMatrixWorld(true);
+      }
 
       player.update(dt);
-      fleet.quizMode = Boolean(islandQuest.active);
-      fleet.learningFireMode = Boolean(actionQuiz.active);
-      fleet.update(dt, () => {});
-      island.update(dt);
-      islandQuest.update(dt);
-      projectiles.update(dt, projEnv);
-      if (!islandQuest.active) {
-        damageControl.update(dt);
+      if (coopGuestWorld) updateCoop(dt);
+      if (!coopGuestWorld) {
+        fleet.quizMode = Boolean(islandQuest.active);
+        fleet.learningFireMode = Boolean(actionQuiz.active);
+        fleet.update(dt, () => {});
+        island.update(dt);
+        islandQuest.update(dt);
+        projectiles.update(dt, projEnv);
+        if (!islandQuest.active) {
+          damageControl.update(dt);
+        }
+        treasures.update(dt, ship.group.position, {
+          harpoon: Boolean(state.bonuses.harpoon),
+          pullTarget: ship.group.position,
+        });
+        if (!islandQuest.active && damageControl.isShipLost?.()) loseToFlooding();
+        updateCoop(dt);
       }
-      treasures.update(dt, ship.group.position, {
-        harpoon: Boolean(state.bonuses.harpoon),
-        pullTarget: ship.group.position,
-      });
-      if (!islandQuest.active && damageControl.isShipLost?.()) loseToFlooding();
       effects.update(dt);
 
       updateHud(dt);

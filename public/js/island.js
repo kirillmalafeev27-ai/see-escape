@@ -7,6 +7,7 @@ const ISLAND_POSITION = new THREE.Vector3(-320, 0, 1420);
 const ISLAND_FIRE_RANGE = 900;
 const ISLAND_MUZZLE_SPEED = 235;
 const ISLAND_DECOR_LOAD_RANGE = 1150;
+const TREASURE_CHEST_LIFT = 0.35;
 
 function mat(color, roughness = 0.86, metalness = 0) {
   return new THREE.MeshStandardMaterial({ color, roughness, metalness });
@@ -204,7 +205,7 @@ export class IslandFortress {
       prepareLoadedModel(model);
       fitLoadedModel(model, {
         targetXZ: item.targetXZ,
-        baseY: item.y,
+        baseY: item.y + (item.asset === "treasure" ? TREASURE_CHEST_LIFT : 0),
         position: new THREE.Vector3(item.x, 0, item.z),
         yaw: item.yaw || 0,
       });
@@ -254,6 +255,28 @@ export class IslandFortress {
     cannon.destroyed = true;
     cannon.mount.visible = false;
     return true;
+  }
+
+  snapshot() {
+    return {
+      cannons: this.cannons.map((cannon) => ({
+        destroyed: Boolean(cannon.destroyed),
+        reload: cannon.reload,
+        yaw: cannon.mount.rotation.y,
+      })),
+    };
+  }
+
+  syncFromSnapshot(snapshot = {}) {
+    const cannons = Array.isArray(snapshot.cannons) ? snapshot.cannons : [];
+    for (let i = 0; i < this.cannons.length; i++) {
+      const item = cannons[i] || {};
+      const cannon = this.cannons[i];
+      cannon.destroyed = Boolean(item.destroyed);
+      cannon.mount.visible = !cannon.destroyed;
+      if (Number.isFinite(item.reload)) cannon.reload = item.reload;
+      if (Number.isFinite(item.yaw)) cannon.mount.rotation.y = item.yaw;
+    }
   }
 
   get position() {

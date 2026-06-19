@@ -18,6 +18,7 @@ const QUEST_INTRO_ARC = 3.2;
 const QUEST_FALLBACK_SHRINE_SCALE = 0.32;
 const QUEST_ALTAR_TARGET_XZ = 6.1;
 const QUEST_TREASURE_TARGET_XZ = 2.35;
+const QUEST_TREASURE_LIFT = 0.32;
 const RAIDER_MODEL_SCALE = 0.8;
 const RAIDER_BOB_WORLD_AMPLITUDE = 0.55;
 const RAIDER_WATERLINE_LIFT = 0.05;
@@ -175,7 +176,7 @@ function buildRaider(parent, position, scale = 1, modelFactory = null) {
 }
 
 export class IslandQuestSystem {
-  constructor({ scene, island, ship, sailing, hud, sampleWaveHeight, raiderShipFactory, onMessage, onComplete }) {
+  constructor({ scene, island, ship, sailing, hud, sampleWaveHeight, raiderShipFactory, requestActionQuiz, onMessage, onComplete }) {
     this.scene = scene;
     this.island = island;
     this.ship = ship;
@@ -183,6 +184,7 @@ export class IslandQuestSystem {
     this.hud = hud;
     this.sampleWaveHeight = sampleWaveHeight || (() => 0);
     this.raiderShipFactory = raiderShipFactory || null;
+    this.requestActionQuiz = requestActionQuiz || null;
     this.onMessage = onMessage || (() => {});
     this.onComplete = onComplete || (() => {});
     this.questLayout = normalizeIslandQuestLayout(loadIslandLayout().quest);
@@ -195,7 +197,9 @@ export class IslandQuestSystem {
     this.completed = false;
     this.playerCell = { ...this.startCell };
     this.pendingMove = { x: 0, y: -1 };
+    this.pendingRelativeMove = null;
     this.directionReady = false;
+    this.quizPending = false;
     this.currentQuestion = null;
     this.renderedQuestion = null;
     this.renderedDirectionKey = "";
@@ -407,7 +411,7 @@ export class IslandQuestSystem {
       prepareLoadedQuestModel(treasure);
       fitLoadedQuestModel(treasure, {
         targetXZ: QUEST_TREASURE_TARGET_XZ,
-        baseY: -0.12,
+        baseY: -0.12 + QUEST_TREASURE_LIFT,
         position: new THREE.Vector3(0, 0, -5),
         yaw: -0.15,
       });
@@ -449,6 +453,36 @@ export class IslandQuestSystem {
     return lookYaw(this._cellWorld(fromCell), this._cellWorld(toCell));
   }
 
+  _currentViewYaw() {
+    try {
+      return this.player?.captureWorldPose?.().yaw ?? this.currentPose?.yaw ?? 0;
+    } catch (_) {
+      return this.currentPose?.yaw ?? 0;
+    }
+  }
+
+  _forwardDirectionFromView() {
+    const yaw = this._currentViewYaw();
+    const forward = new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw));
+    this.root.updateMatrixWorld(true);
+    const rootWorld = this.root.getWorldQuaternion(new THREE.Quaternion());
+    forward.applyQuaternion(rootWorld.invert());
+    if (Math.abs(forward.x) > Math.abs(forward.z)) {
+      return { x: forward.x >= 0 ? 1 : -1, y: 0 };
+    }
+    return { x: 0, y: forward.z >= 0 ? 1 : -1 };
+  }
+
+  _gridDirectionFromRelative(dir) {
+    if (!dir) return null;
+    const forward = this._forwardDirectionFromView();
+    const right = { x: -forward.y, y: forward.x };
+    return {
+      x: right.x * dir.x - forward.x * dir.y,
+      y: right.y * dir.x - forward.y * dir.y,
+    };
+  }
+
   _targetForDirection(dir) {
     if (!dir) return null;
     return clampCell({
@@ -461,8 +495,9 @@ export class IslandQuestSystem {
     return dir ? `${dir.x},${dir.y}` : "";
   }
 
-  _moveName(dir = this.pendingMove) {
+  _moveName(dir = this.pendingRelativeMove || this.pendingMove) {
     if (!dir) return "";
+    if (dir === this.pendingMove && this.pendingRelativeMove) dir = this.pendingRelativeMove;
     if (dir.x > 0) return "вправо";
     if (dir.x < 0) return "влево";
     if (dir.y > 0) return "назад";
@@ -546,7 +581,9 @@ export class IslandQuestSystem {
       if (sameCell(this.playerCell, this.goalCell)) this._complete();
       else {
         this.pendingMove = { x: 0, y: -1 };
+        this.pendingRelativeMove = null;
         this.directionReady = false;
+        this.quizPending = false;
         this.currentQuestion = null;
         this.renderedQuestion = null;
         this._renderHud(true);
@@ -633,7 +670,9 @@ export class IslandQuestSystem {
     this.player.setQuestMode(true);
     this.playerCell = { ...this.startCell };
     this.pendingMove = { x: 0, y: -1 };
+    this.pendingRelativeMove = null;
     this.directionReady = false;
+    this.quizPending = false;
     this.currentQuestion = null;
     this.renderedQuestion = null;
     this.shell = null;
@@ -670,10 +709,12 @@ export class IslandQuestSystem {
   }
 
   _chooseDirection(dir) {
-    if (!this.active || this.moveAnim) return;
-    const target = this._targetForDirection(dir);
+    if (!this.active || this.moveAnim || this.quizPending) return;
+    const gridDir = this._gridDirectionFromRelative(dir);
+    const target = this._targetForDirection(gridDir);
     if (!target || sameCell(target, this.playerCell)) {
       this.pendingMove = { x: 0, y: -1 };
+      this.pendingRelativeMove = null;
       this.directionReady = false;
       this.currentQuestion = null;
       this.renderedQuestion = null;
@@ -683,6 +724,7 @@ export class IslandQuestSystem {
     }
     if (this._isBlocked(target)) {
       this.pendingMove = { x: 0, y: -1 };
+      this.pendingRelativeMove = null;
       this.directionReady = false;
       this.currentQuestion = null;
       this.renderedQuestion = null;
@@ -690,9 +732,79 @@ export class IslandQuestSystem {
       this._renderHud(true);
       return;
     }
-    this.pendingMove = { ...dir };
+    this.pendingMove = { ...gridDir };
+    this.pendingRelativeMove = { ...dir };
     this.directionReady = true;
+    this.currentQuestion = null;
+    this.renderedQuestion = null;
+    this._renderHud(true);
+    if (this.requestActionQuiz) {
+      this._requestMoveQuiz();
+      return;
+    }
     this._askQuestion(`Выбрано направление ${this._moveName(dir)}. Чтобы сделать шаг, ответь правильно.`);
+  }
+
+  async _requestMoveQuiz() {
+    if (!this.active || !this.directionReady || this.moveAnim || this.quizPending || !this.requestActionQuiz) return;
+    const move = { ...this.pendingMove };
+    const relativeMove = this.pendingRelativeMove ? { ...this.pendingRelativeMove } : null;
+    const fromCell = { ...this.playerCell };
+    const target = this._targetForDirection(move);
+    if (!target || sameCell(target, this.playerCell) || this._isBlocked(target)) return;
+
+    this.quizPending = true;
+    this.currentQuestion = null;
+    this.renderedQuestion = null;
+    this._renderHud(true);
+
+    let correct = false;
+    try {
+      correct = Boolean(await this.requestActionQuiz("island", {
+        source: "island-step",
+        move: this._moveName(relativeMove || move),
+        cell: cellKey(target),
+      }));
+    } catch (error) {
+      console.warn("Island action quiz failed:", error);
+    }
+
+    this.quizPending = false;
+    if (!this.active || this.moveAnim) return;
+    if (
+      !this.directionReady ||
+      this.pendingMove.x !== move.x ||
+      this.pendingMove.y !== move.y ||
+      !sameCell(this.playerCell, fromCell)
+    ) {
+      this._renderHud(true);
+      return;
+    }
+
+    if (!correct) {
+      this.directionReady = false;
+      this.pendingRelativeMove = null;
+      this.currentQuestion = null;
+      this.renderedQuestion = null;
+      this.onMessage("РќРµРІРµСЂРЅРѕ: С€Р°Рі РЅР° РѕСЃС‚СЂРѕРІРµ РЅРµ СЃРґРµР»Р°РЅ. Р’С‹Р±РµСЂРё РЅР°РїСЂР°РІР»РµРЅРёРµ РµС‰С‘ СЂР°Р·.");
+      this._renderHud(true);
+      return;
+    }
+
+    const freshTarget = this._targetForDirection(this.pendingMove);
+    if (!freshTarget || sameCell(freshTarget, this.playerCell) || this._isBlocked(freshTarget)) {
+      this.directionReady = false;
+      this.pendingRelativeMove = null;
+      this.currentQuestion = null;
+      this.renderedQuestion = null;
+      this.onMessage("Р­С‚РѕС‚ С…РѕРґ СѓР¶Рµ РЅРµРґРѕСЃС‚СѓРїРµРЅ. Р’С‹Р±РµСЂРё РґСЂСѓРіРѕРµ РЅР°РїСЂР°РІР»РµРЅРёРµ.");
+      this._renderHud(true);
+      return;
+    }
+
+    this.onMessage(`Р’РµСЂРЅРѕ. РРґС‘Рј ${this._moveName(this.pendingMove)}.`);
+    this._startMove(freshTarget);
+    this._renderHud(true);
   }
 
   answer(value) {
@@ -705,6 +817,7 @@ export class IslandQuestSystem {
     const target = this._targetForDirection(this.pendingMove);
     if (sameCell(target, this.playerCell)) {
       this.pendingMove = { x: 0, y: -1 };
+      this.pendingRelativeMove = null;
       this.directionReady = false;
       this.currentQuestion = null;
       this.renderedQuestion = null;
@@ -714,6 +827,7 @@ export class IslandQuestSystem {
     }
     if (this._isBlocked(target)) {
       this.pendingMove = { x: 0, y: -1 };
+      this.pendingRelativeMove = null;
       this.directionReady = false;
       this.currentQuestion = null;
       this.renderedQuestion = null;
@@ -743,7 +857,9 @@ export class IslandQuestSystem {
     this.shellTimer = SHELL_RESPAWN_GRACE;
     this.moveAnim = null;
     this.pendingMove = { x: 0, y: -1 };
+    this.pendingRelativeMove = null;
     this.directionReady = false;
+    this.quizPending = false;
     this.currentQuestion = null;
     this.renderedQuestion = null;
     this._resetBlockedCells();
@@ -947,6 +1063,24 @@ export class IslandQuestSystem {
     if (!this.hud?.questPanel || !this.active) return;
     this._renderDirectionControls();
     this.hud.questGrid.style.display = this.moveAnim ? "none" : "grid";
+    if (this.requestActionQuiz) {
+      this.hud.questQuestion.textContent = this.quizPending
+        ? "Ответь на задание в окне квиза, чтобы сделать шаг."
+        : this.directionReady
+          ? "Направление выбрано. Открывается задание для шага."
+          : "Сначала выбери направление хода.";
+      const moveName = this._moveName();
+      this.hud.questStatus.textContent = this.moveAnim
+        ? "Идём к клетке..."
+        : this.quizPending
+          ? `Ход: ${moveName}. Ждём правильный ответ.`
+          : this.directionReady
+            ? `Ход: ${moveName}. Правильный ответ сделает шаг.`
+            : "Выбери направление кнопкой, WASD или стрелками. Цель - верхняя центральная клетка у сокровища.";
+      this.renderedQuestion = null;
+      this.hud.questAnswers.innerHTML = "";
+      return;
+    }
     this.hud.questQuestion.textContent = this.currentQuestion?.text || "Сначала выбери направление хода.";
     const moveName = this._moveName();
     this.hud.questStatus.textContent = this.moveAnim
@@ -987,7 +1121,7 @@ export class IslandQuestSystem {
 
   _renderDirectionControls() {
     if (!this.hud?.questGrid) return;
-    const selectedKey = this.directionReady ? this._directionKey() : "";
+    const selectedKey = this.directionReady ? this._directionKey(this.pendingRelativeMove || this.pendingMove) : "";
     if (this.renderedDirectionKey === selectedKey && this.hud.questGrid.dataset.mode === "directions") return;
     this.renderedDirectionKey = selectedKey;
     this.hud.questGrid.dataset.mode = "directions";
