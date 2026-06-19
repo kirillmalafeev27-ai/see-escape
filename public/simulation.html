@@ -2,14 +2,14 @@
 <html lang="ru">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>Морской бой · Ocean Sandbox</title>
     <style>
       * { margin: 0; padding: 0; box-sizing: border-box; }
-      html, body { height: 100%; overflow: hidden; background: #04121c; font-family: "Segoe UI", system-ui, sans-serif; color: #eaf6ff; }
-      #app { position: fixed; inset: 0; }
-      canvas { display: block; }
-      button, a, select { pointer-events: auto; touch-action: manipulation; }
+      html, body { height: 100%; overflow: hidden; overscroll-behavior: none; background: #04121c; font-family: "Segoe UI", system-ui, sans-serif; color: #eaf6ff; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+      #app { position: fixed; inset: 0; touch-action: none; }
+      canvas { display: block; touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+      button, a, select { pointer-events: auto; touch-action: manipulation; -webkit-tap-highlight-color: transparent; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
       body.cursor-mode, body.cursor-mode canvas { cursor: auto; }
       body.camera-mode canvas { cursor: none; }
       .panel { background: rgba(4,18,28,0.55); border: 1px solid rgba(120,200,255,0.25); border-radius: 12px; backdrop-filter: blur(6px); }
@@ -41,6 +41,18 @@
       .field select { width: 100%; min-height: 40px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.14); background: rgba(255,255,255,0.09); color: #eaf6ff; padding: 0 10px; font: inherit; font-size: 0.82rem; color-scheme: dark; }
       .field select option { background: #071927; color: #eaf6ff; }
       .slot-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
+      .coop-panel { grid-column: 1; grid-row: 3; display: grid; gap: 10px; min-width: 0; padding-top: 14px; border-top: 1px solid rgba(255,255,255,0.12); }
+      .coop-title { color: #eaf6ff; font-size: 0.82rem; font-weight: 900; }
+      .coop-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 8px; align-items: center; }
+      .coop-row input { min-width: 0; height: 40px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.14); background: rgba(255,255,255,0.09); color: #eaf6ff; padding: 0 10px; font: inherit; font-size: 0.82rem; outline: none; text-transform: uppercase; }
+      .coop-row input:focus { border-color: rgba(127,216,255,0.72); box-shadow: 0 0 0 3px rgba(127,216,255,0.14); }
+      .coop-row button { height: 40px; border-radius: 8px; border: 1px solid rgba(127,216,255,0.35); background: rgba(9,54,78,0.74); color: #bcecff; padding: 0 12px; font: inherit; font-size: 0.76rem; font-weight: 900; cursor: pointer; }
+      .coop-row button:hover { background: rgba(14,81,114,0.95); }
+      .coop-status { min-height: 18px; color: #bcdcee; font-size: 0.74rem; line-height: 1.35; }
+      .coop-status.on { color: #8dff9e; }
+      .coop-status.warn { color: #ffe27a; }
+      .coop-badge { position: fixed; top: calc(318px + env(safe-area-inset-top)); right: calc(14px + env(safe-area-inset-right)); z-index: 26; display: none; max-width: min(330px, 86vw); padding: 8px 10px; border-radius: 8px; border: 1px solid rgba(127,216,255,0.32); background: rgba(4,18,28,0.76); color: #c9f8ed; font-size: 0.76rem; font-weight: 800; backdrop-filter: blur(8px); }
+      .coop-badge.on { display: block; }
 
       #actionQuiz { position: fixed; left: 50%; top: 50%; transform: translate(-50%,-50%); z-index: 86; width: min(620px, calc(100vw - 28px)); display: grid; gap: 12px; padding: 16px; pointer-events: auto; background: rgba(4,18,28,0.9); box-shadow: 0 20px 70px rgba(0,0,0,0.48); }
       .action-quiz-head { display: flex; justify-content: space-between; gap: 12px; align-items: center; color: #ffe27a; }
@@ -74,6 +86,11 @@
 
       #prompt { position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%); z-index: 11; font-size: 0.95rem; font-weight: 600; color: #ffe27a; text-shadow: 0 2px 6px #000; pointer-events: none; }
 
+      .mobile-controls { position: fixed; inset: 0; z-index: 18; display: none; pointer-events: none; touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+      body.touch-controls .mobile-controls { display: block; }
+      .mobile-stick { --stick-x: 0px; --stick-y: 0px; position: absolute; left: calc(18px + env(safe-area-inset-left)); bottom: calc(24px + env(safe-area-inset-bottom)); width: 132px; height: 132px; border-radius: 50%; pointer-events: auto; touch-action: none; background: radial-gradient(circle, rgba(127,216,255,0.2), rgba(9,54,78,0.24)); border: 1px solid rgba(127,216,255,0.38); box-shadow: inset 0 0 24px rgba(127,216,255,0.12), 0 8px 26px rgba(0,0,0,0.32); }
+      .mobile-stick-knob { position: absolute; left: 50%; top: 50%; width: 58px; height: 58px; border-radius: 50%; transform: translate(-50%, -50%) translate(var(--stick-x), var(--stick-y)); background: rgba(188,236,255,0.72); border: 1px solid rgba(234,246,255,0.82); box-shadow: 0 8px 20px rgba(0,0,0,0.32); }
+      .mobile-look-pad { position: absolute; top: 0; right: 0; bottom: 0; width: 58vw; pointer-events: auto; touch-action: none; background: transparent; }
       #crosshair { position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%); z-index: 11; width: 26px; height: 26px; display: none; pointer-events: none; }
       #crosshair::before, #crosshair::after { content: ""; position: absolute; background: #ffe27a; box-shadow: 0 0 3px #000; }
       #crosshair::before { left: 50%; top: 0; width: 2px; height: 100%; transform: translateX(-50%); }
@@ -153,7 +170,48 @@
         .learning-menu { grid-column: auto; grid-row: auto; }
         .learning-head, .learning-controls { grid-template-columns: 1fr; flex-direction: column; }
         .slot-grid { grid-template-columns: 1fr; max-height: 180px; overflow-y: auto; }
+        .coop-panel { grid-column: auto; grid-row: auto; }
+        .coop-row { grid-template-columns: 1fr 1fr; }
+        .coop-row input { grid-column: 1 / -1; }
         .action-quiz-options { grid-template-columns: 1fr; }
+      }
+      @media (max-width: 900px), (pointer: coarse) {
+        #hint { display: none; }
+        #topleft { top: calc(10px + env(safe-area-inset-top)); left: calc(10px + env(safe-area-inset-left)); width: 166px; padding: 7px 9px; font-size: 0.66rem; line-height: 1.45; overflow: hidden; }
+        #topleft div { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        #topleft .bar { width: 132px; height: 8px; }
+        #topright { top: calc(10px + env(safe-area-inset-top)); right: calc(10px + env(safe-area-inset-right)); padding: 8px 10px; font-size: 0.72rem; }
+        #compass { top: calc(96px + env(safe-area-inset-top)); right: calc(10px + env(safe-area-inset-right)); width: 136px; padding: 5px 7px; font-size: 0.62rem; line-height: 1.25; }
+        #windArrow, #compassArrow { font-size: 1.12rem; }
+        #prompt { bottom: calc(92px + env(safe-area-inset-bottom)); width: min(88vw, 520px); text-align: center; font-size: 0.86rem; }
+        #msg { top: auto; bottom: calc(118px + env(safe-area-inset-bottom)); left: calc(160px + env(safe-area-inset-left)); transform: none; max-width: calc(100vw - 180px - env(safe-area-inset-left)); font-size: 0.78rem; line-height: 1.35; }
+        #reloadWrap { bottom: calc(64px + env(safe-area-inset-bottom)); width: min(220px, 54vw); }
+        #fireButton { bottom: calc(116px + env(safe-area-inset-bottom)); max-width: min(260px, 52vw); padding: 11px 14px; font-size: 0.78rem; }
+        #dumpButton { bottom: calc(168px + env(safe-area-inset-bottom)); max-width: min(260px, 52vw); padding: 11px 14px; font-size: 0.78rem; }
+        #jumpButton { right: calc(16px + env(safe-area-inset-right)); bottom: calc(24px + env(safe-area-inset-bottom)); min-width: 84px; padding: 12px 14px; font-size: 0.78rem; }
+        .deckActionButton { right: calc(12px + env(safe-area-inset-right)); min-width: min(178px, 43vw); padding: 10px 12px; font-size: 0.74rem; }
+        #takePlankButton { bottom: calc(82px + env(safe-area-inset-bottom)); }
+        #scoopWaterButton { bottom: calc(134px + env(safe-area-inset-bottom)); }
+        #patchBreachButton { bottom: calc(186px + env(safe-area-inset-bottom)); }
+        #islandTeleportButton { top: calc(126px + env(safe-area-inset-top)); left: calc(10px + env(safe-area-inset-left)); transform: none; max-width: 150px; padding: 8px 10px; font-size: 0.68rem; }
+        #audioGuideButton { top: calc(166px + env(safe-area-inset-top)); left: calc(10px + env(safe-area-inset-left)); right: auto; width: 58px; padding: 8px 0; font-size: 0; text-align: center; }
+        #audioGuideButton::after { content: "Голос"; font-size: 0.64rem; }
+        #audio-repeat { top: calc(166px + env(safe-area-inset-top)); left: calc(74px + env(safe-area-inset-left)); right: auto; width: 36px; height: 36px; }
+        .coop-badge { right: calc(10px + env(safe-area-inset-right)); max-width: min(300px, 72vw); }
+      }
+      @media (max-width: 520px), (pointer: coarse) and (max-width: 760px) {
+        .mobile-stick { width: 116px; height: 116px; left: calc(14px + env(safe-area-inset-left)); bottom: calc(20px + env(safe-area-inset-bottom)); }
+        .mobile-stick-knob { width: 52px; height: 52px; }
+        .mobile-look-pad { width: 56vw; }
+      }
+      @media (max-width: 520px) and (orientation: portrait) {
+        #prompt { left: calc(148px + env(safe-area-inset-left)); transform: none; width: calc(100vw - 168px - env(safe-area-inset-left)); max-width: none; text-align: left; font-size: 0.78rem; }
+      }
+      @media (max-height: 520px) and (orientation: landscape) {
+        #prompt { bottom: calc(52px + env(safe-area-inset-bottom)); font-size: 0.78rem; }
+        #msg { top: calc(10px + env(safe-area-inset-top)); bottom: auto; left: 190px; right: 190px; max-width: none; text-align: center; }
+        #topleft { width: 166px; font-size: 0.6rem; line-height: 1.32; padding: 6px 8px; }
+        #topleft .bar { height: 7px; }
       }
     </style>
 
@@ -261,9 +319,10 @@
     <div id="loader"><div class="spinner"></div><div>Загрузка моря…</div></div>
     <div id="err"><div><h2 style="color:#ff8080">Не удалось запустить</h2><pre id="errmsg"></pre></div></div>
 
-    <script src="./js/learning.js?v=20260615-one-topic-v1"></script>
+    <script src="./js/learning.js?v=20260618-shared-quiz-deck-v1"></script>
+    <script src="./js/coop.js?v=20260617-super-coop-v1"></script>
     <script type="module">
-    import { startGame } from "./js/game.js?v=20260617-persistent-cannon-grants-v1";
+    import { startGame } from "./js/game.js?v=20260619-mobile-controls-v1";
 
       const $ = (id) => document.getElementById(id);
       const loaderEl = $("loader");
@@ -327,6 +386,11 @@
           await window.prepareSeaQuiz?.({ floors: 15, startFloor: 1 });
         } catch (error) {
           console.warn("Question prefetch failed, fallback questions will be used:", error);
+          if (error?.sharedDeckPending) {
+            loaderEl.style.display = "none";
+            setStartBusy(false);
+            return;
+          }
         }
         bootEl.hidden = true;
         try {
