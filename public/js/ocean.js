@@ -431,6 +431,15 @@ export function createWorld(container) {
     water.material.uniforms["time"].value += dt;
   }
 
+  function getSeaTime() {
+    return water.material.uniforms["time"].value;
+  }
+
+  function setSeaTime(value) {
+    if (!Number.isFinite(value)) return;
+    water.material.uniforms["time"].value = value;
+  }
+
   function setWaveHeightMultiplier(value) {
     water.material.uniforms.uWaveHeight.value = THREE.MathUtils.clamp(value, 0.08, 1.25) * 0.42;
   }
@@ -498,6 +507,8 @@ export function createWorld(container) {
     sampleWaveHeight,
     sampleWaveFrame,
     advanceTime,
+    getSeaTime,
+    setSeaTime,
     setWaveHeightMultiplier,
     getWaveHeightMultiplier,
     setQuietZone,

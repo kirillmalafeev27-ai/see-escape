@@ -1,5 +1,6 @@
 (function () {
   const SYNC_INTERVAL_MS = 33;
+  const HTTP_STATE_INTERVAL_MS = 500;
   const WS_BUFFER_LIMIT = 256 * 1024;
 
   function $(id) {
@@ -25,6 +26,7 @@
     players: new Map(),
     configs: new Map(),
     eventHandlers: new Set(),
+    seenEventIds: new Set(),
     socket: null,
     socketOpened: false,
     reconnectTimer: 0,
@@ -32,6 +34,7 @@
     statusEl: null,
     badgeEl: null,
     lastSendAt: 0,
+    lastHttpStateAt: 0,
     sending: false,
 
     get isHost() {
@@ -138,6 +141,10 @@
         const payload = JSON.parse(event.data || "{}");
         if (payload.key && payload.config) this.applyConfig(payload.key, payload.config);
       });
+      this.eventSource.addEventListener("event", (event) => {
+        const payload = JSON.parse(event.data || "{}");
+        this.handleRealtimeMessage(JSON.stringify({ type: "event", ...payload }));
+      });
       this.eventSource.onerror = () => {
         if (this.enabled) this.updateUi(`Комната ${this.room}: резервный канал переподключается...`, "warn");
       };
@@ -155,6 +162,12 @@
       } else if (message.type === "config") {
         this.applyConfig(message.key || message.floor, message.config);
       } else if (message.type === "event") {
+        const eventId = String(message.id || "");
+        if (eventId) {
+          if (this.seenEventIds.has(eventId)) return;
+          this.seenEventIds.add(eventId);
+          if (this.seenEventIds.size > 240) this.seenEventIds.delete(this.seenEventIds.values().next().value);
+        }
         for (const handler of [...this.eventHandlers]) {
           try { handler(message); } catch (_) {}
         }
@@ -235,8 +248,10 @@
       const now = performance.now();
       if (now - this.lastSendAt < SYNC_INTERVAL_MS) return;
       this.lastSendAt = now;
-      if (this.sendRealtime({ type: "state", state })) return;
-      if (this.sending || this.transport === "ws") return;
+      const sentRealtime = this.sendRealtime({ type: "state", state });
+      if (sentRealtime && now - this.lastHttpStateAt < HTTP_STATE_INTERVAL_MS) return;
+      if (this.sending) return;
+      this.lastHttpStateAt = now;
       this.sending = true;
       fetch("/api/coop/state", {
         method: "POST",
@@ -251,7 +266,17 @@
 
     publishEvent(name, payload = {}) {
       if (!this.enabled || !name) return false;
-      return this.sendRealtime({ type: "event", name, payload });
+      const id =
+        (typeof crypto !== "undefined" && crypto.randomUUID)
+          ? crypto.randomUUID()
+          : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      this.sendRealtime({ type: "event", id, name, payload });
+      fetch("/api/coop/event", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ room: this.room, playerId: this.playerId, id, name, payload }),
+      }).catch(() => {});
+      return true;
     },
 
     onEvent(handler) {

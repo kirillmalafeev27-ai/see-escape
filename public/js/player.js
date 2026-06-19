@@ -622,6 +622,15 @@ export class PlayerController {
     this._hasSafePosition = true;
   }
 
+  snapToDeck() {
+    this._placeOnDeck();
+    this._groundFollow(1 / 60);
+    this._updateCameraHeight(1 / 60);
+    this.camera.rotation.set(this.pitch, 0, 0);
+    this.airborne = false;
+    this.verticalVelocity = 0;
+  }
+
   _cannonAim(cannon) {
     if (!cannon) return null;
     this.camera.updateWorldMatrix(true, false);

@@ -2,12 +2,12 @@
 // the waves), the player's aimable cannons, an AI enemy fleet trading
 // realistic cannonball fire, wood-debris impacts, and the HUD/main loop.
 import * as THREE from "three";
-import { createWorld } from "./ocean.js?v=20260619-mobile-optim-v1";
+import { createWorld } from "./ocean.js?v=20260619-full-coop-sync-v1";
 import { EffectsSystem } from "./effects.js?v=20260615-mac-perf-v1";
 import { ProjectileSystem } from "./ballistics.js?v=20260617-super-coop-v1";
 import { buildPlayerShip, SHIP_DEFAULTS } from "./ship.js?v=20260614-buoyancy-v2";
 import { EnemyFleet } from "./enemy.js?v=20260617-super-coop-v1";
-import { PlayerController } from "./player.js?v=20260619-mobile-controls-v1";
+import { PlayerController } from "./player.js?v=20260619-coop-guest-world-v1";
 import { DamageControlSystem } from "./damage-control.js?v=20260617-bucket-15-v1";
 import { loadAndAnalyzeShip } from "./models.js?v=20260607-assets-fire-v1";
 import { applyCollisionProfile, loadAppliedCollisionProfile } from "./collision-profile.js?v=20260609-remove-hold-helpers-v1";
@@ -158,6 +158,9 @@ export async function startGame(container, hud) {
   const coopMeshes = new Map();
   let coopWorldSeq = 0;
   let coopLastAppliedWorldSeq = 0;
+  let coopGuestWorldReady = false;
+  let coopGuestDeckSnapped = false;
+  let coopGuestWaitingMessageShown = false;
   const audioState = {
     prompt: "",
     flags: new Map(),
@@ -489,6 +492,8 @@ export async function startGame(container, hud) {
     const dc = damageControl.getState?.() || {};
     return {
       seq: ++coopWorldSeq,
+      seaTime: world.getSeaTime?.() ?? 0,
+      waveHeightMultiplier: world.getWaveHeightMultiplier?.() ?? 1,
       ship: {
         position: vecPayload(ship.group.position),
         rotation: { x: ship.group.rotation.x, y: ship.group.rotation.y, z: ship.group.rotation.z },
@@ -514,10 +519,15 @@ export async function startGame(container, hud) {
   }
 
   function applyCoopWorld(worldState = {}) {
-    if (!worldState || !coopGuestAuthoritative()) return;
+    if (!worldState || !coopGuestAuthoritative()) return false;
     const seq = Number(worldState.seq) || 0;
-    if (seq && seq <= coopLastAppliedWorldSeq) return;
+    if (seq && seq <= coopLastAppliedWorldSeq) return false;
     if (seq) coopLastAppliedWorldSeq = seq;
+
+    if (Number.isFinite(worldState.seaTime)) world.setSeaTime?.(worldState.seaTime);
+    if (Number.isFinite(worldState.waveHeightMultiplier)) {
+      world.setWaveHeightMultiplier?.(worldState.waveHeightMultiplier);
+    }
 
     const shipState = worldState.ship || {};
     ship.group.position.copy(vecFromPayload(shipState.position, ship.group.position));
@@ -548,6 +558,20 @@ export async function startGame(container, hud) {
     fleet.syncFromSnapshot?.(worldState.enemies || []);
     projectiles.syncFromSnapshot?.(worldState.projectiles || []);
     island.syncFromSnapshot?.(worldState.island || {});
+    if (!coopGuestDeckSnapped && player) {
+      player.snapToDeck?.();
+      coopGuestDeckSnapped = true;
+    }
+    coopGuestWorldReady = true;
+    return true;
+  }
+
+  function applyHostWorldFromPeers() {
+    if (!coopGuestAuthoritative()) return true;
+    const host = coop?.hostPeer?.();
+    const worldState = host?.state?.world;
+    if (!worldState) return false;
+    return applyCoopWorld(worldState) || coopGuestWorldReady;
   }
 
   coop?.onEvent?.((event) => {
@@ -563,6 +587,7 @@ export async function startGame(container, hud) {
       for (const mesh of coopMeshes.values()) mesh.visible = false;
       return;
     }
+    applyHostWorldFromPeers();
 
     const pose = player.captureWorldPose();
     const localInsideHold = Boolean(damageControl.isInsideHold?.(player.rig.position));
@@ -589,9 +614,6 @@ export async function startGame(container, hud) {
     const alive = new Set();
     for (const playerInfo of coop.peers()) {
       const remote = playerInfo.state || {};
-      if (!coop.isHost && playerInfo.seat === 1 && remote.world) {
-        applyCoopWorld(remote.world);
-      }
       const pos = remote.position;
       if (!pos || !Number.isFinite(pos.x) || !Number.isFinite(pos.y) || !Number.isFinite(pos.z)) continue;
       alive.add(playerInfo.id);
@@ -621,8 +643,24 @@ export async function startGame(container, hud) {
     requestAnimationFrame(frame);
     const dt = Math.min(clock.getDelta(), 0.05);
     world.tuneForFrameTime?.(dt);
+    const coopGuestWorld = coopGuestAuthoritative();
+    if (coopGuestWorld) applyHostWorldFromPeers();
     const playerInsideHold = damageControl.isInsideHold?.(player.rig.position) || false;
     damageControl.updateInteriorVisibility(player.rig.position);
+    if (coopGuestWorld && !coopGuestWorldReady) {
+      advanceTime(dt);
+      updateShipQuietWaterZone(playerInsideHold);
+      ship.group.updateMatrixWorld(true);
+      updateCoop(dt);
+      effects.update(dt);
+      updateHud(dt);
+      if (!coopGuestWaitingMessageShown) {
+        setMessage("Ждём синхронизацию капитана комнаты. Если рядом 0 больше пары секунд - проверь, что первый игрок в этой же комнате и страница обновлена.");
+        coopGuestWaitingMessageShown = true;
+      }
+      renderer.render(scene, camera);
+      return;
+    }
     if (state.over) {
       if (playerShipSinking) {
         advanceTime(dt);
@@ -655,13 +693,14 @@ export async function startGame(container, hud) {
         renderer.render(scene, camera);
         return;
       }
-      const coopGuestWorld = coopGuestAuthoritative();
-      advanceTime(dt);
-      const waveTarget = islandQuest.active ? 0.18 : 1;
-      const currentWave = world.getWaveHeightMultiplier?.() ?? 1;
-      world.setWaveHeightMultiplier?.(
-        THREE.MathUtils.lerp(currentWave, waveTarget, 1 - Math.exp(-2.4 * dt))
-      );
+      if (!coopGuestWorld) {
+        advanceTime(dt);
+        const waveTarget = islandQuest.active ? 0.18 : 1;
+        const currentWave = world.getWaveHeightMultiplier?.() ?? 1;
+        world.setWaveHeightMultiplier?.(
+          THREE.MathUtils.lerp(currentWave, waveTarget, 1 - Math.exp(-2.4 * dt))
+        );
+      }
 
       if (!coopGuestWorld) {
         windTimer -= dt;
