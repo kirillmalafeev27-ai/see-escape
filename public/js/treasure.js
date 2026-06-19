@@ -78,6 +78,14 @@ export class TreasureSystem {
     this.onCollect();
   }
 
+  clear() {
+    for (const treasure of this.list) {
+      if (treasure.rope) this.scene.remove(treasure.rope);
+      this.scene.remove(treasure.root);
+    }
+    this.list = [];
+  }
+
   update(dt, playerPosition, { harpoon = false, pullTarget = playerPosition } = {}) {
     for (let i = this.list.length - 1; i >= 0; i--) {
       const treasure = this.list[i];

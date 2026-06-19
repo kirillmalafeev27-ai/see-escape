@@ -48,6 +48,12 @@ export class ProjectileSystem {
     this.list.splice(i, 1);
   }
 
+  clear() {
+    for (let i = this.list.length - 1; i >= 0; i--) {
+      this._retire(this.list[i], i);
+    }
+  }
+
   snapshot(limit = 72) {
     return this.list.slice(0, limit).map((p) => ({
       pos: { x: p.pos.x, y: p.pos.y, z: p.pos.z },

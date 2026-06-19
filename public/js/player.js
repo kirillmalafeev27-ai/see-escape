@@ -4,7 +4,7 @@
 // raised decks and all). A nearby deck cannon follows the mouse within its
 // traverse; the yellow arc starts at its muzzle and a quiz-gated action arms it.
 import * as THREE from "three";
-import { predictTrajectory } from "./ballistics.js?v=20260603-bonuses-island-v1";
+import { predictTrajectory } from "./ballistics.js?v=20260619-authoritative-coop-v2";
 import { pointInsideCollisionHole } from "./collision-profile.js?v=20260609-remove-hold-helpers-v1";
 
 const PLAYER_MUZZLE_SPEED = 220;
@@ -78,7 +78,7 @@ function angleDelta(a, b) {
 }
 
 export class PlayerController {
-  constructor({ scene, camera, ship, domElement, projectiles, effects, getEnv, fireButton, dumpButton, jumpButton, takePlankButton, scoopWaterButton, patchBreachButton, islandTeleportButton, damageControl, sailing, islandQuest, requestActionQuiz, onMessage }) {
+  constructor({ scene, camera, ship, domElement, projectiles, effects, getEnv, fireButton, dumpButton, jumpButton, takePlankButton, scoopWaterButton, patchBreachButton, islandTeleportButton, damageControl, sailing, islandQuest, requestActionQuiz, onMessage, onCoopAction }) {
     this.camera = camera;
     this.ship = ship;
     this.dom = domElement;
@@ -97,6 +97,7 @@ export class PlayerController {
     this.islandQuest = islandQuest || null;
     this.requestActionQuiz = requestActionQuiz || null;
     this.onMessage = onMessage || (() => {});
+    this.onCoopAction = onCoopAction || (() => {});
     this.dims = ship.dims;
     this.walkableMeshes = ship.walkableMeshes || [];
     this.stairZones = ship.stairZones || [];
@@ -420,11 +421,11 @@ export class PlayerController {
         return;
       }
       if (document.pointerLockElement !== this.dom) {
-        if (e.button === 0 && this._hasGrantedFireFromUnlockedClick()) {
-          this._fire();
-        } else {
+        if (e.button === 0) {
           this.enterCameraMode();
+          e.preventDefault();
         }
+        return;
       } else if (e.button === 0) {
         this._fire();
       }
@@ -568,9 +569,28 @@ export class PlayerController {
     this.rig.updateWorldMatrix(true, false);
     return {
       position: this.rig.getWorldPosition(new THREE.Vector3()),
+      localPosition: this.rig.position.clone(),
       yaw: this.yaw + this.ship.group.rotation.y,
       pitch: this.pitch,
+      eyeHeight: this.camera.position.y,
     };
+  }
+
+  resetForRun() {
+    this.questMode = false;
+    this.activeCannon = null;
+    this.aimInTraverse = false;
+    this.fireQuizGrant = null;
+    this.deckFireGrants.clear();
+    this.quizActionPending = false;
+    this.walkMultiplier = 1;
+    this.grapeshotUnlocked = false;
+    this.cannonMode = "round";
+    this.handCannonCharges = 0;
+    if (this.handCannon) this.handCannon.visible = false;
+    for (const cannon of this.cannons) cannon.reload = 0;
+    this._resetVirtualMove();
+    this.snapToDeck();
   }
 
   setQuestMode(active) {
@@ -629,6 +649,17 @@ export class PlayerController {
     this.camera.rotation.set(this.pitch, 0, 0);
     this.airborne = false;
     this.verticalVelocity = 0;
+  }
+
+  _publishCoopAction(action, payload = {}) {
+    this.onCoopAction(action, {
+      ...payload,
+      localPosition: {
+        x: this.rig.position.x,
+        y: this.rig.position.y,
+        z: this.rig.position.z,
+      },
+    });
   }
 
   _cannonAim(cannon) {
@@ -790,6 +821,23 @@ export class PlayerController {
   }
 
   _interact() {
+    if (this.damageControl?.canDumpBucket(this.rig)) {
+      if (this.damageControl.dumpBucket(this.rig)) {
+        this.verticalVelocity = 0;
+        this.airborne = false;
+        this._rememberSafePosition();
+      }
+      return;
+    }
+    if (this.damageControl?.canScoopWater(this.rig)) {
+      if (this.damageControl.scoopWater(this.rig, this.camera)) {
+        this._publishCoopAction("scoop-water");
+        this.verticalVelocity = 0;
+        this.airborne = false;
+        this._rememberSafePosition();
+      }
+      return;
+    }
     if (this.damageControl?.interact(this.rig, this.camera)) {
       this.verticalVelocity = 0;
       this.airborne = false;
@@ -813,6 +861,7 @@ export class PlayerController {
     if (this.damageControl?.canPatchBreach(this.rig)) {
       if (!(await this._gateAction("patch", { source: "breach" }))) return;
       if (this.damageControl?.patchNearestBreach(this.rig)) {
+        this._publishCoopAction("patch-breach");
         this.verticalVelocity = 0;
         this.airborne = false;
         this._rememberSafePosition();
@@ -844,6 +893,7 @@ export class PlayerController {
 
   _scoopWater() {
     if (this.damageControl?.scoopWater(this.rig, this.camera)) {
+      this._publishCoopAction("scoop-water");
       this.verticalVelocity = 0;
       this.airborne = false;
       this._rememberSafePosition();
@@ -853,6 +903,7 @@ export class PlayerController {
   async _patchBreach() {
     if (!(await this._gateAction("patch", { source: "breach" }))) return;
     if (this.damageControl?.patchNearestBreach(this.rig)) {
+      this._publishCoopAction("patch-breach");
       this.verticalVelocity = 0;
       this.airborne = false;
       this._rememberSafePosition();

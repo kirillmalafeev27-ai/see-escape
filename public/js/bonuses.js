@@ -103,4 +103,10 @@ export class BonusSystem {
     this.active = false;
     this.onMessage(`Бонус выбран: ${bonus.title}.`);
   }
+
+  reset() {
+    this.active = false;
+    this.choices = [];
+    if (this.hud?.bonusChoice) this.hud.bonusChoice.style.display = "none";
+  }
 }

@@ -4,18 +4,18 @@
 import * as THREE from "three";
 import { createWorld } from "./ocean.js?v=20260619-full-coop-sync-v1";
 import { EffectsSystem } from "./effects.js?v=20260615-mac-perf-v1";
-import { ProjectileSystem } from "./ballistics.js?v=20260617-super-coop-v1";
-import { buildPlayerShip, SHIP_DEFAULTS } from "./ship.js?v=20260614-buoyancy-v2";
-import { EnemyFleet } from "./enemy.js?v=20260617-super-coop-v1";
-import { PlayerController } from "./player.js?v=20260619-coop-guest-world-v1";
-import { DamageControlSystem } from "./damage-control.js?v=20260617-bucket-15-v1";
+import { ProjectileSystem } from "./ballistics.js?v=20260619-authoritative-coop-v2";
+import { buildPlayerShip, SHIP_DEFAULTS } from "./ship.js?v=20260619-authoritative-coop-v2";
+import { EnemyFleet } from "./enemy.js?v=20260619-authoritative-coop-v2";
+import { PlayerController } from "./player.js?v=20260619-authoritative-coop-v2";
+import { DamageControlSystem } from "./damage-control.js?v=20260619-authoritative-coop-v2";
 import { loadAndAnalyzeShip } from "./models.js?v=20260607-assets-fire-v1";
 import { applyCollisionProfile, loadAppliedCollisionProfile } from "./collision-profile.js?v=20260609-remove-hold-helpers-v1";
 import { SailingSystem } from "./sailing.js?v=20260603-bonuses-island-v1";
-import { TreasureSystem } from "./treasure.js?v=20260603-bonuses-island-v1";
+import { TreasureSystem } from "./treasure.js?v=20260619-authoritative-coop-v2";
 import { IslandFortress } from "./island.js?v=20260617-super-coop-v1";
-import { BonusSystem } from "./bonuses.js?v=20260615-clickable-bonuses-v1";
-import { IslandQuestSystem } from "./island-quest.js?v=20260617-facing-island-controls-v1";
+import { BonusSystem } from "./bonuses.js?v=20260619-authoritative-coop-v2";
+import { IslandQuestSystem } from "./island-quest.js?v=20260619-authoritative-coop-v2";
 import { applyCannonLayout, loadCannonLayout } from "./cannon-layout.js?v=20260609-default-profile-v2";
 import { AudioGuide } from "./audio-guide.js?v=20260615-once-hints-v1";
 import { ActionQuizGate } from "./action-quiz.js?v=20260617-island-action-quiz-v1";
@@ -303,6 +303,10 @@ export async function startGame(container, hud) {
     islandQuest,
     requestActionQuiz: (action, context) => actionQuiz.request(action, context),
     onMessage: (m) => m && setMessage(m),
+    onCoopAction: (action, payload = {}) => {
+      if (!coop?.enabled || coop.isHost) return;
+      coop.publishEvent?.("coop-action", { action, ...payload });
+    },
   });
   islandQuest.setPlayer(player);
   bonusSystem = new BonusSystem({
@@ -426,6 +430,54 @@ export async function startGame(container, hud) {
     document.exitPointerLock?.();
   }
 
+  function resetRun() {
+    state.score = 0;
+    state.treasures = 0;
+    state.over = false;
+    state.bonuses = {};
+    playerShipSinking = false;
+    playerSinkTimer = 0;
+    sinkingOverlayShown = false;
+    coopGuestWorldReady = !coopGuestAuthoritative();
+    coopGuestDeckSnapped = false;
+    coopGuestWaitingMessageShown = false;
+
+    wind.set(3, 0, 1);
+    windTarget.set(3, 0, 1);
+    windTimer = 0;
+    world.setWaveHeightMultiplier?.(1);
+
+    ship.group.position.set(0, 0, 0);
+    ship.group.rotation.set(0, 0, 0);
+    ship.resetBuoyancy?.();
+    ship.group.updateMatrixWorld(true);
+
+    sailing.controlling = false;
+    sailing.throttle = 0.36;
+    sailing.rudder = 0;
+    sailing.speed = 0;
+    sailing.speedMultiplier = 1;
+    sailing.anchored = false;
+    sailing.windAlignment = 0;
+    sailing.velocity.set(0, 0, 0);
+
+    damageControl.reset?.();
+    fleet.reset?.();
+    projectiles.clear?.();
+    treasures.clear?.();
+    island.syncFromSnapshot?.({
+      cannons: (island.cannons || []).map(() => ({ destroyed: false, reload: 0, yaw: 0 })),
+    });
+    islandQuest.reset?.();
+    bonusSystem?.reset?.();
+    player?.resetForRun?.();
+
+    hud.gameover.style.display = "none";
+    hud.flash.style.opacity = "0";
+    updateShipQuietWaterZone(false);
+    setMessage("Restarted in the same room.");
+  }
+
   // ---- HUD helpers ----
   let msgTimer = 0;
   function setMessage(text, options = {}) {
@@ -484,6 +536,10 @@ export async function startGame(container, hud) {
     );
   }
 
+  function isVecPayload(v) {
+    return Number.isFinite(v?.x) && Number.isFinite(v?.y) && Number.isFinite(v?.z);
+  }
+
   function coopGuestAuthoritative() {
     return Boolean(coop?.enabled && !coop.isHost);
   }
@@ -512,6 +568,7 @@ export async function startGame(container, hud) {
       playerShipSinking,
       playerSinkTimer,
       flood: dc.waterLevel || 0,
+      damage: damageControl.snapshot?.() || dc,
       enemies: fleet.snapshot?.() || [],
       projectiles: projectiles.snapshot?.() || [],
       island: island.snapshot?.() || {},
@@ -548,12 +605,17 @@ export async function startGame(container, hud) {
 
     if (Number.isFinite(worldState.score)) state.score = worldState.score;
     if (Number.isFinite(worldState.treasures)) state.treasures = worldState.treasures;
-    if (Number.isFinite(worldState.flood)) damageControl.waterLevel = worldState.flood;
+    if (worldState.damage) damageControl.syncFromSnapshot?.(worldState.damage);
+    else if (Number.isFinite(worldState.flood)) damageControl.waterLevel = worldState.flood;
     playerShipSinking = Boolean(worldState.playerShipSinking);
     if (Number.isFinite(worldState.playerSinkTimer)) playerSinkTimer = worldState.playerSinkTimer;
     const wasOver = state.over;
     state.over = Boolean(worldState.over);
     if (state.over && !wasOver) hud.gameover.style.display = "flex";
+    if (!state.over && wasOver) {
+      hud.gameover.style.display = "none";
+      sinkingOverlayShown = false;
+    }
 
     fleet.syncFromSnapshot?.(worldState.enemies || []);
     projectiles.syncFromSnapshot?.(worldState.projectiles || []);
@@ -574,12 +636,70 @@ export async function startGame(container, hud) {
     return applyCoopWorld(worldState) || coopGuestWorldReady;
   }
 
+  function remoteActionPosition(event) {
+    const payload = event?.payload || {};
+    if (isVecPayload(payload.localPosition)) return vecFromPayload(payload.localPosition);
+    const remote = coop?.players?.get?.(event.source)?.state || {};
+    if (isVecPayload(remote.localPosition)) return vecFromPayload(remote.localPosition);
+    if (isVecPayload(remote.position)) return ship.group.worldToLocal(vecFromPayload(remote.position));
+    return null;
+  }
+
+  function applyRemoteCoopAction(event) {
+    if (!coop?.isHost || event.source === coop.playerId) return;
+    const action = String(event.payload?.action || "");
+    const position = remoteActionPosition(event);
+    if (!position) return;
+    if (action === "scoop-water") {
+      damageControl.applyRemoteScoopWater?.(position);
+    } else if (action === "patch-breach") {
+      damageControl.applyRemotePatchBreach?.(position);
+    }
+  }
+
+  function requestRestart() {
+    if (!state.over) return;
+    if (coop?.enabled && !coop.isHost) {
+      coop.publishEvent?.("restart-request", {});
+      setMessage("Restart requested from the room captain.");
+      return;
+    }
+    resetRun();
+    if (coop?.enabled) {
+      coop.publishEvent?.("restart", { seq: Date.now() });
+      updateCoop(0);
+    }
+  }
+
   coop?.onEvent?.((event) => {
-    if (event.name !== "projectile" || event.source === coop.playerId) return;
-    const payload = event.payload || {};
-    const origin = vecFromPayload(payload.origin);
-    const velocity = vecFromPayload(payload.velocity);
-    projectiles.spawn(origin, velocity, { ...(payload.options || {}), coopRemote: true });
+    if (event.name === "projectile") {
+      if (event.source === coop.playerId) return;
+      const payload = event.payload || {};
+      const origin = vecFromPayload(payload.origin);
+      const velocity = vecFromPayload(payload.velocity);
+      projectiles.spawn(origin, velocity, { ...(payload.options || {}), coopRemote: true });
+      return;
+    }
+    if (event.name === "coop-action") {
+      applyRemoteCoopAction(event);
+      return;
+    }
+    if (event.name === "restart-request") {
+      if (coop?.isHost && event.source !== coop.playerId) {
+        resetRun();
+        coop.publishEvent?.("restart", { seq: Date.now() });
+        updateCoop(0);
+      }
+      return;
+    }
+    if (event.name === "restart" && coopGuestAuthoritative()) {
+      state.over = false;
+      playerShipSinking = false;
+      playerSinkTimer = 0;
+      sinkingOverlayShown = false;
+      hud.gameover.style.display = "none";
+      coopGuestWorldReady = false;
+    }
   });
 
   function updateCoop(dt) {
@@ -593,8 +713,10 @@ export async function startGame(container, hud) {
     const localInsideHold = Boolean(damageControl.isInsideHold?.(player.rig.position));
     const payload = {
       position: vecPayload(pose.position),
+      localPosition: vecPayload(pose.localPosition),
       yaw: pose.yaw,
       pitch: pose.pitch,
+      eyeHeight: pose.eyeHeight,
       ship: {
         position: vecPayload(ship.group.position),
         yaw: ship.group.rotation.y,
@@ -614,8 +736,13 @@ export async function startGame(container, hud) {
     const alive = new Set();
     for (const playerInfo of coop.peers()) {
       const remote = playerInfo.state || {};
-      const pos = remote.position;
-      if (!pos || !Number.isFinite(pos.x) || !Number.isFinite(pos.y) || !Number.isFinite(pos.z)) continue;
+      let worldPosition = null;
+      if (isVecPayload(remote.localPosition)) {
+        worldPosition = ship.group.localToWorld(vecFromPayload(remote.localPosition));
+      } else if (isVecPayload(remote.position)) {
+        worldPosition = vecFromPayload(remote.position);
+      }
+      if (!worldPosition) continue;
       alive.add(playerInfo.id);
       let mesh = coopMeshes.get(playerInfo.id);
       if (!mesh) {
@@ -623,7 +750,7 @@ export async function startGame(container, hud) {
         scene.add(mesh);
         coopMeshes.set(playerInfo.id, mesh);
       }
-      mesh.position.set(pos.x, pos.y, pos.z);
+      mesh.position.copy(worldPosition);
       mesh.rotation.y = Number.isFinite(remote.yaw) ? remote.yaw : 0;
       mesh.visible = true;
       mesh.scale.setScalar(remote.insideHold ? 0.82 : 1);
@@ -634,7 +761,10 @@ export async function startGame(container, hud) {
   }
 
   addEventListener("keydown", (e) => {
-    if (e.code === "KeyR" && state.over) location.reload();
+    if (e.code === "KeyR" && state.over) {
+      e.preventDefault();
+      requestRestart();
+    }
   });
 
   // ---- main loop ----
@@ -662,6 +792,15 @@ export async function startGame(container, hud) {
       return;
     }
     if (state.over) {
+      if (coopGuestWorld) {
+        updateShipQuietWaterZone(playerInsideHold);
+        ship.group.updateMatrixWorld(true);
+        effects.update(dt);
+        updateHud(dt);
+        updateCoop(dt);
+        renderer.render(scene, camera);
+        return;
+      }
       if (playerShipSinking) {
         advanceTime(dt);
         playerSinkTimer += dt;

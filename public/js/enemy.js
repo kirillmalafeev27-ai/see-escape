@@ -269,6 +269,15 @@ export class EnemyFleet {
     }
   }
 
+  reset() {
+    for (const enemy of this.list) {
+      if (enemy?.group) this.scene.remove(enemy.group);
+    }
+    this.list = [];
+    this.spawnTimer = FIRST_SPAWN_DELAY;
+    this.killCount = 0;
+  }
+
   update(dt, onKilled) {
     const player = this.getPlayerTarget();
     if (this.list.filter((e) => !e.sinking).length < this.maxAlive) {

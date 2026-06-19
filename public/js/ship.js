@@ -316,6 +316,11 @@ export function buildPlayerShip(dims, { cannonTemplate = null } = {}) {
     group.rotation.z = THREE.MathUtils.lerp(group.rotation.z, targetRoll, rotationAlpha);
   }
 
+  function resetBuoyancy() {
+    buoyancyReady = false;
+    currentDraftOffset = 0;
+  }
+
   const _v = new THREE.Vector3();
   function hullTest(worldPoint) {
     _v.copy(worldPoint).sub(group.position);
@@ -345,6 +350,7 @@ export function buildPlayerShip(dims, { cannonTemplate = null } = {}) {
     cannons,
     snapCannonsToDeck,
     applyBuoyancy,
+    resetBuoyancy,
     hullTest,
     hidePrimitives,
     dims: d,

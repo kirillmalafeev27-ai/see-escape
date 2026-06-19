@@ -586,6 +586,122 @@ export class DamageControlSystem {
     return true;
   }
 
+  _snapshotBreach(breach) {
+    return {
+      side: { axis: breach.side?.axis || "x", sign: breach.side?.sign || 1 },
+      inner: { x: breach.inner.x, y: breach.inner.y, z: breach.inner.z },
+      inward: { x: breach.inward.x, y: breach.inward.y, z: breach.inward.z },
+    };
+  }
+
+  snapshot() {
+    return {
+      waterLevel: this.waterLevel,
+      breachCooldown: this.breachCooldown,
+      floodMultiplier: this.floodMultiplier,
+      breaches: this.breaches.filter((breach) => breach.active).map((breach) => this._snapshotBreach(breach)),
+    };
+  }
+
+  syncFromSnapshot(snapshot = {}) {
+    if (Number.isFinite(snapshot.waterLevel)) this.waterLevel = snapshot.waterLevel;
+    if (Number.isFinite(snapshot.breachCooldown)) this.breachCooldown = snapshot.breachCooldown;
+    if (Number.isFinite(snapshot.floodMultiplier)) this.floodMultiplier = snapshot.floodMultiplier;
+    const items = Array.isArray(snapshot.breaches) ? snapshot.breaches : [];
+    while (this.breaches.length > items.length) {
+      const breach = this.breaches.pop();
+      breach?.innerVisual?.removeFromParent?.();
+      breach?.outerVisual?.removeFromParent?.();
+    }
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i] || {};
+      const side = {
+        axis: item.side?.axis === "z" ? "z" : "x",
+        sign: item.side?.sign < 0 ? -1 : 1,
+      };
+      const inner = new THREE.Vector3(
+        Number.isFinite(item.inner?.x) ? item.inner.x : this.holdCenterX,
+        Number.isFinite(item.inner?.y) ? item.inner.y : this.floorY + 2.2,
+        Number.isFinite(item.inner?.z) ? item.inner.z : this.holdCenterZ
+      );
+      const inward = new THREE.Vector3(
+        Number.isFinite(item.inward?.x) ? item.inward.x : -side.sign,
+        Number.isFinite(item.inward?.y) ? item.inward.y : -0.35,
+        Number.isFinite(item.inward?.z) ? item.inward.z : 0
+      ).normalize();
+      let breach = this.breaches[i];
+      if (!breach) {
+        const outer = inner.clone();
+        if (side.axis === "x") outer.x = side.sign * this.dims.beam * 0.52;
+        else outer.z = side.sign * this.dims.length * 0.48;
+        breach = {
+          active: true,
+          side,
+          inner,
+          inward,
+          innerVisual: this._makeBreachVisual(side, inner, false),
+          outerVisual: this._makeBreachVisual(side, outer, true),
+        };
+        this.breaches.push(breach);
+      } else {
+        breach.active = true;
+        breach.side = side;
+        breach.inner.copy(inner);
+        breach.inward.copy(inward);
+        breach.innerVisual.position.copy(inner);
+        if (side.axis === "x") breach.innerVisual.rotation.y = side.sign * Math.PI / 2;
+        const outer = inner.clone();
+        if (side.axis === "x") outer.x = side.sign * this.dims.beam * 0.52;
+        else outer.z = side.sign * this.dims.length * 0.48;
+        breach.outerVisual.position.copy(outer);
+        if (side.axis === "x") breach.outerVisual.rotation.y = side.sign * Math.PI / 2;
+      }
+      breach.innerVisual.visible = true;
+      breach.outerVisual.visible = true;
+    }
+    this._updateFloodWater(0);
+  }
+
+  reset() {
+    this.waterLevel = 0;
+    this.breachCooldown = 0;
+    this.floodMultiplier = 1;
+    this.bailAssistRate = 0;
+    this.repairAssistInterval = 0;
+    this.repairAssistTimer = 0;
+    this.bucketFull = false;
+    this.pour = null;
+    this.heldBucket?.removeFromParent?.();
+    this.heldBucket = null;
+    this.heldPlank?.removeFromParent?.();
+    this.heldPlank = null;
+    for (const plank of this.planks) {
+      plank.available = true;
+      plank.mesh.visible = true;
+    }
+    for (const breach of this.breaches) {
+      breach.innerVisual?.removeFromParent?.();
+      breach.outerVisual?.removeFromParent?.();
+    }
+    this.breaches = [];
+    this._updateFloodWater(0);
+  }
+
+  applyRemoteScoopWater(position) {
+    if (!position || !this._canCollectWater(position) || this.waterLevel < 1) return false;
+    this.waterLevel = Math.max(0, this.waterLevel - BUCKET_AMOUNT);
+    this._updateFloodWater(0);
+    return true;
+  }
+
+  applyRemotePatchBreach(position) {
+    if (!position || !this._insideHold(position)) return false;
+    const breach = this._nearestActiveBreach(position);
+    if (!breach) return false;
+    this._patchBreach(breach);
+    return true;
+  }
+
   addFloodSlow(amount = 0.25) {
     this.floodMultiplier = Math.max(0.28, this.floodMultiplier * (1 - amount));
   }

@@ -877,6 +877,30 @@ export class IslandQuestSystem {
     this.onMessage("Ядро попало в твою клетку: поражение попытки. Начинаем с острова.");
   }
 
+  reset() {
+    this.active = false;
+    this.completed = false;
+    this.quizPending = false;
+    this.moveAnim = null;
+    this.shell = null;
+    this.shells = [];
+    this.shellTimer = SHELL_RELOAD;
+    this.playerCell = { ...this.startCell };
+    this.pendingMove = { x: 0, y: -1 };
+    this.pendingRelativeMove = null;
+    this.directionReady = false;
+    this.currentQuestion = null;
+    this.renderedQuestion = null;
+    this.currentPose = null;
+    this.returnPose = null;
+    this._resetBlockedCells();
+    this._hideShellVisuals();
+    this._setRaidersVisible(false);
+    if (this.hud?.questPanel) this.hud.questPanel.style.display = "none";
+    this.player?.setQuestMode?.(false);
+    this.sailing?.setAnchored?.(false);
+  }
+
   _activeShellLimit() {
     return this.playerCell.y <= 2 ? MAX_ACTIVE_SHELLS_PEAK : MAX_ACTIVE_SHELLS_BASE;
   }
