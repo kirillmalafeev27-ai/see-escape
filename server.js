@@ -2,6 +2,7 @@ import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import zlib from "node:zlib";
+import crypto from "node:crypto";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 
@@ -13,6 +14,7 @@ const publicDir = path.join(__dirname, "public");
 const PORT = Number(process.env.PORT || 4317);
 const HOST = process.env.HOST || "0.0.0.0";
 const JSON_LIMIT = 1024 * 1024;
+const coopRooms = new Map();
 
 const MIME = new Map([
   [".html", "text/html; charset=utf-8"],
@@ -30,6 +32,233 @@ const MIME = new Map([
 ]);
 const COMPRESSIBLE = new Set([".html", ".js", ".css", ".json", ".svg"]);
 const LARGE_ASSET = new Set([".glb", ".gltf", ".bin", ".jpg", ".jpeg", ".png", ".webp"]);
+
+function roomCode() {
+  return Math.random().toString(36).slice(2, 6).toUpperCase();
+}
+
+function getCoopRoom(code) {
+  const id = String(code || "").trim().toUpperCase() || roomCode();
+  if (!coopRooms.has(id)) {
+    coopRooms.set(id, {
+      id,
+      players: new Map(),
+      configs: new Map(),
+      clients: new Set(),
+      wsClients: new Set(),
+      createdAt: Date.now(),
+      lastSeen: Date.now(),
+    });
+  }
+  return coopRooms.get(id);
+}
+
+function publicCoopRoomState(room) {
+  const now = Date.now();
+  return {
+    room: room.id,
+    players: [...room.players.values()].filter((player) => now - player.lastSeen < 15000),
+    configs: Object.fromEntries(room.configs.entries()),
+  };
+}
+
+function broadcastCoop(room, event, data) {
+  const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+  for (const client of [...room.clients]) {
+    try {
+      client.write(payload);
+    } catch (_) {
+      room.clients.delete(client);
+    }
+  }
+  broadcastCoopWs(room, coopWsPayload(event, data));
+}
+
+function coopWsPayload(event, data) {
+  if (event === "config") return { type: "config", ...data, serverTime: Date.now() };
+  return { type: event, state: data, data, serverTime: Date.now() };
+}
+
+function encodeWsFrame(text) {
+  const payload = Buffer.from(text);
+  const length = payload.length;
+  let header;
+  if (length < 126) {
+    header = Buffer.from([0x81, length]);
+  } else if (length < 65536) {
+    header = Buffer.alloc(4);
+    header[0] = 0x81;
+    header[1] = 126;
+    header.writeUInt16BE(length, 2);
+  } else {
+    header = Buffer.alloc(10);
+    header[0] = 0x81;
+    header[1] = 127;
+    header.writeBigUInt64BE(BigInt(length), 2);
+  }
+  return Buffer.concat([header, payload]);
+}
+
+function sendCoopWs(socket, message) {
+  if (!socket || socket.destroyed) return;
+  try {
+    socket.write(encodeWsFrame(JSON.stringify(message)));
+  } catch (_) {
+    socket.destroy();
+  }
+}
+
+function broadcastCoopWs(room, message, except = null) {
+  for (const socket of [...room.wsClients]) {
+    if (socket === except) continue;
+    if (socket.destroyed) {
+      room.wsClients.delete(socket);
+      continue;
+    }
+    sendCoopWs(socket, message);
+  }
+}
+
+function decodeWsFrames(buffer) {
+  const frames = [];
+  let offset = 0;
+  while (buffer.length - offset >= 2) {
+    const first = buffer[offset];
+    const second = buffer[offset + 1];
+    const opcode = first & 0x0f;
+    const masked = Boolean(second & 0x80);
+    let length = second & 0x7f;
+    let cursor = offset + 2;
+    if (length === 126) {
+      if (buffer.length - cursor < 2) break;
+      length = buffer.readUInt16BE(cursor);
+      cursor += 2;
+    } else if (length === 127) {
+      if (buffer.length - cursor < 8) break;
+      const bigLength = buffer.readBigUInt64BE(cursor);
+      if (bigLength > BigInt(1024 * 1024)) throw new Error("websocket payload too large");
+      length = Number(bigLength);
+      cursor += 8;
+    }
+    const maskLength = masked ? 4 : 0;
+    if (buffer.length - cursor < maskLength + length) break;
+    const mask = masked ? buffer.subarray(cursor, cursor + 4) : null;
+    cursor += maskLength;
+    const payload = Buffer.from(buffer.subarray(cursor, cursor + length));
+    if (mask) {
+      for (let i = 0; i < payload.length; i++) payload[i] ^= mask[i % 4];
+    }
+    frames.push({ opcode, text: payload.toString("utf8") });
+    offset = cursor + length;
+  }
+  return { frames, rest: buffer.subarray(offset) };
+}
+
+function handleCoopWsMessage(room, player, socket, raw) {
+  let message;
+  try {
+    message = JSON.parse(raw || "{}");
+  } catch (_) {
+    return;
+  }
+  player.lastSeen = Date.now();
+  room.lastSeen = player.lastSeen;
+  if (message.type === "state") {
+    player.state = message.state || null;
+    broadcastCoop(room, "state", publicCoopRoomState(room));
+    return;
+  }
+  if (message.type === "config") {
+    const key = String(message.key || message.floor || "").trim();
+    if (!key) return;
+    if (message.replace || !room.configs.has(key)) {
+      room.configs.set(key, message.config || {});
+      broadcastCoop(room, "config", { room: room.id, key, floor: key, config: room.configs.get(key) });
+      broadcastCoop(room, "room", publicCoopRoomState(room));
+    }
+    return;
+  }
+  if (message.type === "event" && message.name) {
+    broadcastCoopWs(room, {
+      type: "event",
+      name: String(message.name),
+      payload: message.payload || {},
+      source: player.id,
+      serverTime: Date.now(),
+    });
+    return;
+  }
+  if (message.type === "ping") {
+    sendCoopWs(socket, { type: "pong", serverTime: Date.now() });
+  }
+}
+
+function handleCoopWebSocketUpgrade(req, socket) {
+  const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
+  if (url.pathname !== "/api/coop/ws") return false;
+  const key = req.headers["sec-websocket-key"];
+  if (!key) {
+    socket.destroy();
+    return true;
+  }
+  const room = getCoopRoom(url.searchParams.get("room"));
+  const player = room.players.get(url.searchParams.get("player"));
+  if (!player) {
+    socket.end("HTTP/1.1 404 Not Found\r\n\r\n");
+    return true;
+  }
+  const accept = crypto
+    .createHash("sha1")
+    .update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`)
+    .digest("base64");
+  socket.write([
+    "HTTP/1.1 101 Switching Protocols",
+    "Upgrade: websocket",
+    "Connection: Upgrade",
+    `Sec-WebSocket-Accept: ${accept}`,
+    "\r\n",
+  ].join("\r\n"));
+  room.wsClients.add(socket);
+  player.lastSeen = Date.now();
+  room.lastSeen = player.lastSeen;
+  sendCoopWs(socket, coopWsPayload("room", publicCoopRoomState(room)));
+  let pending = Buffer.alloc(0);
+  socket.on("data", (chunk) => {
+    try {
+      const decoded = decodeWsFrames(Buffer.concat([pending, chunk]));
+      pending = decoded.rest;
+      for (const frame of decoded.frames) {
+        if (frame.opcode === 0x8) {
+          socket.end();
+          continue;
+        }
+        if (frame.opcode === 0x9) {
+          socket.write(Buffer.from([0x8a, 0x00]));
+          continue;
+        }
+        if (frame.opcode === 0x1) handleCoopWsMessage(room, player, socket, frame.text);
+      }
+    } catch (_) {
+      socket.destroy();
+    }
+  });
+  socket.on("close", () => room.wsClients.delete(socket));
+  socket.on("error", () => room.wsClients.delete(socket));
+  return true;
+}
+
+function cleanupCoopRooms() {
+  const now = Date.now();
+  for (const [id, room] of coopRooms) {
+    for (const [playerId, player] of room.players) {
+      if (now - player.lastSeen > 30000) room.players.delete(playerId);
+    }
+    if (!room.players.size && !room.clients.size && !room.wsClients.size && now - room.lastSeen > 300000) {
+      coopRooms.delete(id);
+    }
+  }
+}
+setInterval(cleanupCoopRooms, 30000).unref();
 
 function send(res, status, body, headers = {}) {
   if (res.writableEnded) return;
@@ -79,6 +308,69 @@ function createRouteApp() {
 
 const routeApp = createRouteApp();
 installQuizRoutes(routeApp);
+installCoopRoutes(routeApp);
+
+function installCoopRoutes(app) {
+  app.post("/api/coop/join", (req, res) => {
+    const room = getCoopRoom(req.body?.room);
+    room.lastSeen = Date.now();
+    const playerId = Math.random().toString(36).slice(2, 10);
+    const seat = room.players.size + 1;
+    const colors = ["#3aa0ff", "#5ce58a", "#ffe27a", "#ff8fc7"];
+    const color = colors[(seat - 1) % colors.length];
+    const player = {
+      id: playerId,
+      seat,
+      color,
+      name: String(req.body?.name || `Игрок ${seat}`).slice(0, 24),
+      state: null,
+      lastSeen: Date.now(),
+    };
+    room.players.set(playerId, player);
+    broadcastCoop(room, "room", publicCoopRoomState(room));
+    res.json({ ok: true, room: room.id, playerId, seat, color, state: publicCoopRoomState(room) });
+  });
+
+  app.get("/api/coop/events", (req, res) => {
+    const room = getCoopRoom(req.query.room);
+    room.lastSeen = Date.now();
+    res.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+    });
+    res.write(`event: room\ndata: ${JSON.stringify(publicCoopRoomState(room))}\n\n`);
+    room.clients.add(res);
+    req.on("close", () => {
+      room.clients.delete(res);
+    });
+  });
+
+  app.post("/api/coop/state", (req, res) => {
+    const room = getCoopRoom(req.body?.room);
+    const player = room.players.get(req.body?.playerId);
+    if (!player) return res.status(404).json({ ok: false, error: "player not found" });
+    player.state = req.body?.state || null;
+    player.lastSeen = Date.now();
+    room.lastSeen = player.lastSeen;
+    broadcastCoop(room, "state", publicCoopRoomState(room));
+    res.json({ ok: true });
+  });
+
+  app.post("/api/coop/config", (req, res) => {
+    const room = getCoopRoom(req.body?.room);
+    const key = String(req.body?.key || req.body?.floor || "").trim();
+    if (!key) return res.status(400).json({ ok: false, error: "bad config key" });
+    if (req.body?.replace || !room.configs.has(key)) {
+      room.configs.set(key, req.body?.config || {});
+      room.lastSeen = Date.now();
+      broadcastCoop(room, "config", { room: room.id, key, floor: key, config: room.configs.get(key) });
+      broadcastCoop(room, "room", publicCoopRoomState(room));
+    }
+    res.json({ ok: true, config: room.configs.get(key) });
+  });
+}
 
 function readJsonBody(req) {
   return new Promise((resolve, reject) => {
@@ -227,6 +519,11 @@ const server = http.createServer(async (req, res) => {
   }
 
   serveFile(req, res, filePath);
+});
+
+server.on("upgrade", (req, socket) => {
+  if (handleCoopWebSocketUpgrade(req, socket)) return;
+  socket.destroy();
 });
 
 server.listen(PORT, HOST, () => {
