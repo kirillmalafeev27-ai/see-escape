@@ -42,14 +42,15 @@
       return typeof WebSocket !== "undefined" && this.socket?.readyState === WebSocket.OPEN;
     },
 
-    async join(roomCodeValue = "") {
+    async join(roomCodeValue = "", options = {}) {
+      const room = cleanRoom(roomCodeValue);
       const response = await fetch("/api/coop/join", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ room: cleanRoom(roomCodeValue) }),
+        body: JSON.stringify({ room, create: Boolean(options.create) }),
       });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const data = await response.json();
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.ok) throw new Error(data.error || `HTTP ${response.status}`);
       this.enabled = true;
       this.room = data.room;
       this.playerId = data.playerId;
@@ -58,6 +59,13 @@
       this.applyRoomState(data.state);
       this.openRealtime();
       this.updateUi(`Комната ${this.room}. Ты игрок ${this.seat}. Канал синхронизации запускается...`, "on");
+      const deckReady = Boolean(this.configForKey("quiz-deck")?.questions?.length);
+      const startHint = this.isHost
+        ? "Ты капитан. Нажми старт, чтобы подготовить общие задания."
+        : deckReady
+          ? "Общие задания получены. Нажми старт, чтобы зайти вторым игроком."
+          : "Подключено. Нажми старт: если колода уже готова, она подтянется с сервера.";
+      this.updateUi(`Комната ${this.room}. Ты игрок ${this.seat}. ${startHint}`, "on");
       this.updateBadge();
       this.publishQuizSettings();
       try {
@@ -66,6 +74,17 @@
         history.replaceState(null, "", url);
       } catch (_) {}
       return data;
+    },
+
+    async refreshRoomState() {
+      if (!this.enabled || !this.room) return null;
+      const response = await fetch(`/api/coop/room?room=${encodeURIComponent(this.room)}`, {
+        cache: "no-store",
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.ok) return null;
+      this.applyRoomState(data.state);
+      return data.state || null;
     },
 
     openRealtime() {
@@ -143,6 +162,7 @@
     },
 
     applyRoomState(roomState = {}) {
+      if (roomState.room) this.room = roomState.room;
       if (roomState.configs) {
         Object.entries(roomState.configs).forEach(([key, config]) => this.applyConfig(key, config));
       }
@@ -185,7 +205,7 @@
       const cleanKey = String(key || "").trim();
       if (!cleanKey) return;
       this.configs.set(cleanKey, config);
-      if (this.sendRealtime({ type: "config", key: cleanKey, config, replace: Boolean(options.replace) })) return;
+      this.sendRealtime({ type: "config", key: cleanKey, config, replace: Boolean(options.replace) });
       fetch("/api/coop/config", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -196,7 +216,12 @@
           config,
           replace: Boolean(options.replace),
         }),
-      }).catch(() => {});
+      })
+        .then((response) => response.ok ? response.json() : null)
+        .then((data) => {
+          if (data?.config) this.applyConfig(cleanKey, data.config);
+        })
+        .catch(() => {});
     },
 
     publishQuizSettings() {
@@ -302,18 +327,18 @@
     SeaCoop.badgeEl = badge;
 
     const input = $("coop-room");
-    const connect = async (room) => {
+    const connect = async (room, options = {}) => {
       try {
         SeaCoop.updateUi("Подключаю комнату...", "warn");
-        await SeaCoop.join(room);
+        await SeaCoop.join(room, options);
       } catch (error) {
         SeaCoop.updateUi(`Не удалось подключиться: ${error.message || error}`, "warn");
       }
     };
 
-    $("coop-create")?.addEventListener("click", () => connect(""));
-    $("coop-join")?.addEventListener("click", () => connect(input?.value || ""));
-    if (initialRoom) connect(initialRoom);
+    $("coop-create")?.addEventListener("click", () => connect("", { create: true }));
+    $("coop-join")?.addEventListener("click", () => connect(input?.value || "", { create: false }));
+    if (initialRoom) connect(initialRoom, { create: false });
   }
 
   window.SeaCoop = SeaCoop;

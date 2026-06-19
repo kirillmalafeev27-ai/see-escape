@@ -280,6 +280,7 @@
       this.generatedPools = savedPoolSnapshot?.generatedPools || Object.create(null);
       this.sharedDeck = null;
       this.sharedDeckSignature = '';
+      this.lastSharedDeckConfig = null;
       this.fetching = Object.create(null);
       this.usedDisplays = Object.create(null);
       this.generationAllowed = false;
@@ -300,6 +301,7 @@
         this.usedDisplays = Object.create(null);
         this.sharedDeck = null;
         this.sharedDeckSignature = '';
+        this.lastSharedDeckConfig = null;
       }
       saveSettings(this.settings);
       this.renderSettingsMenu();
@@ -436,14 +438,28 @@
     }
 
     publishSharedDeck(floors = 15, startFloor = 1) {
-      if (!window.SeaCoop?.enabled || !window.SeaCoop.isHost || !this.sharedDeck?.length) return;
-      window.SeaCoop.publishConfig?.(COOP_DECK_KEY, {
+      if (!this.sharedDeck?.length) return false;
+      this.lastSharedDeckConfig = {
         signature: this.sharedDeckSignature || settingsSignature(this.settings),
         settings: window.getSeaQuizSettings?.(),
         floors,
         startFloor,
         questions: this.sharedDeck,
-      }, { replace: true });
+      };
+      if (!window.SeaCoop?.enabled || !window.SeaCoop.isHost) return false;
+      window.SeaCoop.publishConfig?.(COOP_DECK_KEY, this.lastSharedDeckConfig, { replace: true });
+      return true;
+    }
+
+    republishSharedDeck() {
+      if (!window.SeaCoop?.enabled || !window.SeaCoop.isHost) return false;
+      if (!this.lastSharedDeckConfig && this.sharedDeck?.length) {
+        this.publishSharedDeck(this.sharedDeck.length, 1);
+        return true;
+      }
+      if (!this.lastSharedDeckConfig) return false;
+      window.SeaCoop.publishConfig?.(COOP_DECK_KEY, this.lastSharedDeckConfig, { replace: true });
+      return true;
     }
 
     applySharedDeck(config = {}) {
@@ -475,26 +491,36 @@
       if (!valid.length) return false;
       this.sharedDeck = valid;
       this.sharedDeckSignature = config.signature || settingsSignature(this.settings);
+      this.lastSharedDeckConfig = { ...config, questions: valid };
       this.generationAllowed = true;
       this.renderSettingsMenu();
       return true;
     }
 
-    waitForSharedDeck(count = 1, timeoutMs = 8000) {
-      const existing = window.SeaCoop?.configForKey?.(COOP_DECK_KEY);
-      if (existing) this.applySharedDeck(existing);
-      if ((this.sharedDeck?.length || 0) >= count) return Promise.resolve(this.sharedDeck);
-      return new Promise((resolve) => {
-        const start = Date.now();
-        const timer = setInterval(() => {
-          const config = window.SeaCoop?.configForKey?.(COOP_DECK_KEY);
-          if (config) this.applySharedDeck(config);
-          if ((this.sharedDeck?.length || 0) >= count || Date.now() - start >= timeoutMs) {
-            clearInterval(timer);
-            resolve(this.sharedDeck || null);
-          }
-        }, 80);
-      });
+    async waitForSharedDeck(count = 1, timeoutMs = 8000) {
+      const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+      const applyAvailable = async () => {
+        const existing = window.SeaCoop?.configForKey?.(COOP_DECK_KEY);
+        if (existing) this.applySharedDeck(existing);
+        if ((this.sharedDeck?.length || 0) >= count) return true;
+        await window.SeaCoop?.refreshRoomState?.();
+        const refreshed = window.SeaCoop?.configForKey?.(COOP_DECK_KEY);
+        if (refreshed) this.applySharedDeck(refreshed);
+        return (this.sharedDeck?.length || 0) >= count;
+      };
+      if (await applyAvailable()) return this.sharedDeck;
+
+      const start = Date.now();
+      let lastRequest = 0;
+      while (Date.now() - start < timeoutMs) {
+        if (Date.now() - lastRequest > 1000) {
+          window.SeaCoop?.publishEvent?.("request-config", { key: COOP_DECK_KEY });
+          lastRequest = Date.now();
+        }
+        await sleep(160);
+        if (await applyAvailable()) return this.sharedDeck;
+      }
+      return this.sharedDeck || null;
     }
 
     seedFallbackPool(slot, minCount = 1) {
@@ -882,13 +908,30 @@
     if (Object.keys(next).length) bank.configure(next);
   };
   window.applySeaQuizDeck = (config) => bank.applySharedDeck(config);
+  window.republishSeaQuizDeck = () => bank.republishSharedDeck();
   window.releaseQuizQuestion = (question) => bank.releaseQuestion(question);
   window.quizPoolHasQuestion = (context) => bank.poolHasQuestion(context);
   window.quizEnsureQuestionAvailable = (context) => bank.ensureQuestionAvailable(context);
   window.playQuizAudio = (question, force) => AudioQuiz.play(question, force);
   window.replayQuizAudio = () => AudioQuiz.replay();
 
+  function attachCoopDeckResponder() {
+    if (!window.SeaCoop?.onEvent || attachCoopDeckResponder.attached) return Boolean(attachCoopDeckResponder.attached);
+    attachCoopDeckResponder.attached = true;
+    window.SeaCoop.onEvent((event) => {
+      if (event?.name !== 'request-config' || event?.payload?.key !== COOP_DECK_KEY) return;
+      bank.republishSharedDeck();
+    });
+    return true;
+  }
+
+  const coopResponderTimer = setInterval(() => {
+    if (attachCoopDeckResponder()) clearInterval(coopResponderTimer);
+  }, 100);
+  setTimeout(() => clearInterval(coopResponderTimer), 10000);
+
   document.addEventListener('DOMContentLoaded', () => {
+    attachCoopDeckResponder();
     createLearningMenu(bank);
     AudioQuiz.ensureButton();
   });
