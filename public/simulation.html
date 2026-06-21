@@ -96,6 +96,7 @@
       #crosshair::before { left: 50%; top: 0; width: 2px; height: 100%; transform: translateX(-50%); }
       #crosshair::after { top: 50%; left: 0; height: 2px; width: 100%; transform: translateY(-50%); }
 
+      #restartButton { position: fixed; left: 50%; top: calc(50% + 92px); transform: translateX(-50%); z-index: 70; display: none; min-height: 44px; padding: 12px 20px; border: 1px solid rgba(255,226,122,0.85); border-radius: 8px; background: #ffe27a; color: #1b1607; font: 900 0.9rem "Segoe UI", system-ui, sans-serif; cursor: pointer; }
       #reloadWrap { position: fixed; bottom: 50px; left: 50%; transform: translateX(-50%); z-index: 11; width: 240px; display: none; pointer-events: none; }
       #reloadWrap .lbl { font-size: 0.7rem; color: #bcdcee; text-align: center; margin-bottom: 3px; }
       #fireButton { position: fixed; bottom: 104px; left: 50%; transform: translateX(-50%); z-index: 20; display: none; padding: 12px 22px; border: 1px solid rgba(255,226,122,0.85); border-radius: 9px; background: rgba(70,42,15,0.88); color: #ffe27a; font: 700 0.9rem "Segoe UI", system-ui, sans-serif; cursor: pointer; box-shadow: 0 3px 14px rgba(0,0,0,0.35); }
@@ -125,6 +126,7 @@
       #gameover { position: fixed; inset: 0; z-index: 60; display: none; flex-direction: column; align-items: center; justify-content: center; background: rgba(4,10,16,0.85); text-align: center; }
       #gameover h1 { color: #ff7070; font-size: 2.4rem; margin-bottom: 10px; }
       #gameover p { color: #bcdcee; }
+      #restartButton { margin-top: 16px; min-height: 44px; padding: 12px 20px; border: 1px solid rgba(255,226,122,0.85); border-radius: 8px; background: #ffe27a; color: #1b1607; font: 900 0.9rem "Segoe UI", system-ui, sans-serif; cursor: pointer; }
 
       #back { position: fixed; bottom: 14px; right: 14px; z-index: 10; text-decoration: none; font-size: 0.78rem; padding: 8px 14px; color: #eaf6ff; }
       #sandboxLink { position: fixed; top: 14px; left: calc(50% - 95px); transform: translateX(-50%); z-index: 20; text-decoration: none; font-size: 0.82rem; font-weight: 700; padding: 10px 15px; color: #ffe27a; background: rgba(70,42,15,0.88); border: 1px solid rgba(255,226,122,0.7); border-radius: 9px; }
@@ -199,6 +201,7 @@
         #audioGuideButton::after { content: "Голос"; font-size: 0.64rem; }
         #audio-repeat { top: calc(166px + env(safe-area-inset-top)); left: calc(74px + env(safe-area-inset-left)); right: auto; width: 36px; height: 36px; }
         .coop-badge { right: calc(10px + env(safe-area-inset-right)); max-width: min(300px, 72vw); }
+        #restartButton { min-width: 156px; min-height: 52px; font-size: 1rem; }
       }
       @media (max-width: 520px), (pointer: coarse) and (max-width: 760px) {
         .mobile-stick { width: 116px; height: 116px; left: calc(14px + env(safe-area-inset-left)); bottom: calc(20px + env(safe-area-inset-bottom)); }
@@ -262,6 +265,7 @@
     </div>
 
     <div id="crosshair"></div>
+    <button id="restartButton" type="button">Restart</button>
 
     <div id="reloadWrap">
       <div class="lbl">Перезарядка</div>
@@ -321,9 +325,9 @@
     <div id="err"><div><h2 style="color:#ff8080">Не удалось запустить</h2><pre id="errmsg"></pre></div></div>
 
     <script src="./js/learning.js?v=20260619-coop-room-deck-v1"></script>
-    <script src="./js/coop.js?v=20260619-authoritative-coop-v2"></script>
+    <script src="./js/coop.js?v=20260620-coop-touch-fixes-v1"></script>
     <script type="module">
-    import { startGame } from "./js/game.js?v=20260619-authoritative-coop-v2";
+    import { startGame } from "./js/game.js?v=20260620-story-treasure-v1";
 
       const $ = (id) => document.getElementById(id);
       const loaderEl = $("loader");
@@ -358,6 +362,7 @@
         msg: $("msg"),
         flash: $("flash"),
         gameover: $("gameover"),
+        restartButton: $("restartButton"),
         bonusChoice: $("bonusChoice"),
         bonusCards: $("bonusCards"),
         questPanel: $("questPanel"),
