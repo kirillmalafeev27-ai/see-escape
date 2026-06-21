@@ -541,7 +541,7 @@ export class StoryTreasureMode {
         const ok = selected.length === correctIds.length && selected.every((id, index) => id === correctIds[index]);
         if (!ok) {
           selected.length = 0;
-          render("Пока неверно. Вспомни: начало, помощь, поиск, итог.");
+          render("Неверно.");
           return;
         }
         this.orderSolved = true;
