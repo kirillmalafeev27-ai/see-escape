@@ -1,6 +1,6 @@
 (function () {
   const SYNC_INTERVAL_MS = 33;
-  const HTTP_STATE_INTERVAL_MS = 500;
+  const HTTP_STATE_INTERVAL_MS = 120;
   const WS_BUFFER_LIMIT = 256 * 1024;
 
   function $(id) {

@@ -176,7 +176,7 @@ function buildRaider(parent, position, scale = 1, modelFactory = null) {
 }
 
 export class IslandQuestSystem {
-  constructor({ scene, island, ship, sailing, hud, sampleWaveHeight, raiderShipFactory, requestActionQuiz, onMessage, onComplete }) {
+  constructor({ scene, island, ship, sailing, hud, sampleWaveHeight, raiderShipFactory, requestActionQuiz, beforeBegin, onMessage, onComplete }) {
     this.scene = scene;
     this.island = island;
     this.ship = ship;
@@ -185,6 +185,7 @@ export class IslandQuestSystem {
     this.sampleWaveHeight = sampleWaveHeight || (() => 0);
     this.raiderShipFactory = raiderShipFactory || null;
     this.requestActionQuiz = requestActionQuiz || null;
+    this.beforeBegin = beforeBegin || null;
     this.onMessage = onMessage || (() => {});
     this.onComplete = onComplete || (() => {});
     this.questLayout = normalizeIslandQuestLayout(loadIslandLayout().quest);
@@ -193,6 +194,7 @@ export class IslandQuestSystem {
     this.startCell = { ...this.questLayout.startCell };
     this.goalCell = { ...this.questLayout.goalCell };
     this.player = null;
+    this.available = true;
     this.active = false;
     this.completed = false;
     this.playerCell = { ...this.startCell };
@@ -221,6 +223,20 @@ export class IslandQuestSystem {
 
   setPlayer(player) {
     this.player = player;
+  }
+
+  setAvailable(value) {
+    this.available = Boolean(value);
+    if (this.root) this.root.visible = this.available;
+    if (!this.available) {
+      this.active = false;
+      this.quizPending = false;
+      this.moveAnim = null;
+      this._hideShellVisuals();
+      this._setRaidersVisible(false);
+      if (this.hud?.questPanel) this.hud.questPanel.style.display = "none";
+      this.player?.setQuestMode?.(false);
+    }
   }
 
   _buildScene() {
@@ -647,23 +663,37 @@ export class IslandQuestSystem {
   }
 
   getPrompt() {
+    if (!this.available) return "";
     if (this.completed) return "";
     if (this.active) return this.moveAnim ? "Остров: идём к клетке..." : "Остров: осмотрись мышью, выбери направление, потом ответь на вопрос.";
     return this._distanceToIsland() <= ANCHOR_RANGE ? "E - бросить якорь и высадиться на остров" : "";
   }
 
   interact() {
-    if (this.active || this.completed || this._distanceToIsland() > ANCHOR_RANGE || !this.player) return false;
+    if (!this.available || this.active || this.completed || this._distanceToIsland() > ANCHOR_RANGE || !this.player) return false;
+    if (this.beforeBegin) {
+      return Boolean(this.beforeBegin({
+        force: false,
+        startQuest: () => this._begin(),
+      }));
+    }
     return this._begin();
   }
 
   forceStart() {
-    if (this.active || !this.player) return false;
+    if (!this.available || this.active || !this.player) return false;
     this.completed = false;
+    if (this.beforeBegin) {
+      return Boolean(this.beforeBegin({
+        force: true,
+        startQuest: () => this._begin(),
+      }));
+    }
     return this._begin();
   }
 
   _begin() {
+    if (this.root) this.root.visible = true;
     this.active = true;
     this.sailing.setAnchored(true);
     this.returnPose = this.player.captureWorldPose();
@@ -897,6 +927,7 @@ export class IslandQuestSystem {
     this._hideShellVisuals();
     this._setRaidersVisible(false);
     if (this.hud?.questPanel) this.hud.questPanel.style.display = "none";
+    if (this.root) this.root.visible = this.available;
     this.player?.setQuestMode?.(false);
     this.sailing?.setAnchored?.(false);
   }

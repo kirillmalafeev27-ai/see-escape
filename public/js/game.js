@@ -7,18 +7,19 @@ import { EffectsSystem } from "./effects.js?v=20260615-mac-perf-v1";
 import { ProjectileSystem } from "./ballistics.js?v=20260619-authoritative-coop-v2";
 import { buildPlayerShip, SHIP_DEFAULTS } from "./ship.js?v=20260619-authoritative-coop-v2";
 import { EnemyFleet } from "./enemy.js?v=20260619-authoritative-coop-v2";
-import { PlayerController } from "./player.js?v=20260619-authoritative-coop-v2";
-import { DamageControlSystem } from "./damage-control.js?v=20260619-authoritative-coop-v2";
+import { PlayerController } from "./player.js?v=20260620-coop-touch-fixes-v1";
+import { DamageControlSystem } from "./damage-control.js?v=20260620-coop-touch-fixes-v1";
 import { loadAndAnalyzeShip } from "./models.js?v=20260607-assets-fire-v1";
 import { applyCollisionProfile, loadAppliedCollisionProfile } from "./collision-profile.js?v=20260609-remove-hold-helpers-v1";
 import { SailingSystem } from "./sailing.js?v=20260603-bonuses-island-v1";
-import { TreasureSystem } from "./treasure.js?v=20260619-authoritative-coop-v2";
-import { IslandFortress } from "./island.js?v=20260617-super-coop-v1";
+import { TreasureSystem } from "./treasure.js?v=20260620-story-treasure-v1";
+import { IslandFortress } from "./island.js?v=20260620-story-treasure-v1";
 import { BonusSystem } from "./bonuses.js?v=20260619-authoritative-coop-v2";
-import { IslandQuestSystem } from "./island-quest.js?v=20260619-authoritative-coop-v2";
+import { IslandQuestSystem } from "./island-quest.js?v=20260620-story-treasure-v1";
 import { applyCannonLayout, loadCannonLayout } from "./cannon-layout.js?v=20260609-default-profile-v2";
 import { AudioGuide } from "./audio-guide.js?v=20260615-once-hints-v1";
 import { ActionQuizGate } from "./action-quiz.js?v=20260617-island-action-quiz-v1";
+import { StoryTreasureMode } from "./story-treasures.js?v=20260620-story-treasure-v1";
 
 function playerLabelTexture(text, color = "#5ce58a") {
   const canvas = document.createElement("canvas");
@@ -75,6 +76,15 @@ function makeRemotePlayerMesh(color = "#5ce58a", label = "P2") {
   group.add(labelSprite);
 
   return group;
+}
+
+function coopSeatLocalOffset(seat = 1) {
+  const index = Math.max(0, Number(seat || 1) - 1);
+  if (index === 0) return new THREE.Vector3(0, 0, 0);
+  const ring = Math.ceil(index / 6);
+  const angle = ((index - 1) % 6) * (Math.PI / 3);
+  const radius = 2.1 + ring * 0.85;
+  return new THREE.Vector3(Math.cos(angle) * radius, 0, Math.sin(angle) * radius);
 }
 
 export async function startGame(container, hud) {
@@ -161,6 +171,8 @@ export async function startGame(container, hud) {
   let coopGuestWorldReady = false;
   let coopGuestDeckSnapped = false;
   let coopGuestWaitingMessageShown = false;
+  let coopGuestSeaTimeBase = 0;
+  let coopGuestSeaTimeLocalMs = 0;
   const audioState = {
     prompt: "",
     flags: new Map(),
@@ -198,6 +210,7 @@ export async function startGame(container, hud) {
     return projectile;
   };
   let bonusSystem = null;
+  let storyMode = null;
   let playerShipSinking = false;
   let playerSinkTimer = 0;
   let sinkingOverlayShown = false;
@@ -217,8 +230,21 @@ export async function startGame(container, hud) {
   }
   const treasures = new TreasureSystem(scene, sampleWaveHeight, () => {
     state.treasures++;
-    setMessage("Сундук с сокровищами поднят на борт.");
-    bonusSystem?.showChoices();
+    const fragment = storyMode?.collect({
+      onAfterRead: ({ complete } = {}) => {
+        if (!complete) bonusSystem?.showChoices();
+      },
+    });
+    if (fragment) {
+      setMessage(`Сюжетное сокровище ${state.treasures}: фрагмент ${fragment.level} поднят на борт.`, {
+        voice: true,
+        id: `story-fragment-${state.treasures}`,
+        priority: 2,
+      });
+    } else {
+      setMessage("Сундук с сокровищами поднят на борт.");
+      bonusSystem?.showChoices();
+    }
   });
 
   // Enemy GLB loads in the background; primitive enemies are good enough until it arrives.
@@ -261,12 +287,20 @@ export async function startGame(container, hud) {
     sampleWaveHeight,
     raiderShipFactory: enemyFactory,
     requestActionQuiz: (action, context) => actionQuiz.request(action, context),
+    beforeBegin: () => storyMode?.handleIslandEntry({ onSolved: () => winAtIsland() }) ?? false,
     onMessage: (m) => m && setMessage(m),
     onComplete: () => {
       state.treasures += 3;
       winAtIsland();
     },
   });
+  storyMode = new StoryTreasureMode({
+    onMessage: (m) => m && setMessage(m),
+    enterCursorMode: () => player?.enterCursorMode?.(),
+    onRevealIsland: (run) => revealStoryIsland(run),
+    onSolved: () => winAtIsland(),
+  });
+  setStoryIslandVisible(false);
 
   loadAndAnalyzeShip("models/low-poly_pirate_ship.glb", {
     targetLength: 72,
@@ -308,6 +342,7 @@ export async function startGame(container, hud) {
       coop.publishEvent?.("coop-action", { action, ...payload });
     },
   });
+  if (coop?.enabled) player.setSpawnOffset?.(coopSeatLocalOffset(coop.seat));
   islandQuest.setPlayer(player);
   bonusSystem = new BonusSystem({
     hud,
@@ -412,6 +447,7 @@ export async function startGame(container, hud) {
   function winAtIsland() {
     if (state.over) return;
     state.over = true;
+    storyMode?.markVictory?.();
     const title = hud.gameover.querySelector("h1");
     const text = hud.gameover.querySelector("p");
     if (title) {
@@ -430,7 +466,32 @@ export async function startGame(container, hud) {
     document.exitPointerLock?.();
   }
 
+  function setStoryIslandVisible(visible) {
+    island.setRevealed?.(visible);
+    islandQuest.setAvailable?.(visible);
+    if (hud.islandTeleportButton) hud.islandTeleportButton.style.display = visible ? "block" : "none";
+  }
+
+  function revealStoryIsland(run) {
+    setStoryIslandVisible(true);
+    const title = run?.title ? ` История: ${run.title}.` : "";
+    setMessage(`Все пять фрагментов собраны. Остров появился на компасе.${title} Иди к нему и восстанови порядок ключевых фраз.`, {
+      voice: true,
+      id: "story-island-revealed",
+      priority: 3,
+      interrupt: true,
+      cooldown: 0,
+    });
+    audioGuide.event("Остров открыт. Следуй по компасу и восстанови историю по ключевым фразам.", {
+      id: "story-island-revealed-audio",
+      priority: 3,
+      interrupt: true,
+      cooldown: 0,
+    });
+  }
+
   function resetRun() {
+    const advanceStory = Boolean(storyMode?.runWon);
     state.score = 0;
     state.treasures = 0;
     state.over = false;
@@ -441,6 +502,8 @@ export async function startGame(container, hud) {
     coopGuestWorldReady = !coopGuestAuthoritative();
     coopGuestDeckSnapped = false;
     coopGuestWaitingMessageShown = false;
+    coopGuestSeaTimeBase = world.getSeaTime?.() ?? 0;
+    coopGuestSeaTimeLocalMs = performance.now();
 
     wind.set(3, 0, 1);
     windTarget.set(3, 0, 1);
@@ -466,16 +529,21 @@ export async function startGame(container, hud) {
     projectiles.clear?.();
     treasures.clear?.();
     island.syncFromSnapshot?.({
+      revealed: false,
       cannons: (island.cannons || []).map(() => ({ destroyed: false, reload: 0, yaw: 0 })),
     });
     islandQuest.reset?.();
+    storyMode?.reset?.({ advanceStory });
+    setStoryIslandVisible(false);
     bonusSystem?.reset?.();
     player?.resetForRun?.();
+    if (coop?.enabled) player?.setSpawnOffset?.(coopSeatLocalOffset(coop.seat));
 
     hud.gameover.style.display = "none";
+    if (hud.restartButton) hud.restartButton.style.display = "none";
     hud.flash.style.opacity = "0";
     updateShipQuietWaterZone(false);
-    setMessage("Restarted in the same room.");
+    setMessage(storyMode?.introLine?.() || "Restarted in the same room.");
   }
 
   // ---- HUD helpers ----
@@ -544,6 +612,25 @@ export async function startGame(container, hud) {
     return Boolean(coop?.enabled && !coop.isHost);
   }
 
+  function syncGuestSeaTime(seaTime) {
+    if (!Number.isFinite(seaTime)) return;
+    coopGuestSeaTimeBase = seaTime;
+    coopGuestSeaTimeLocalMs = performance.now();
+    world.setSeaTime?.(seaTime);
+  }
+
+  function advanceGuestSeaTime() {
+    if (!coopGuestAuthoritative() || !coopGuestWorldReady || !coopGuestSeaTimeLocalMs) return;
+    const elapsed = Math.max(0, (performance.now() - coopGuestSeaTimeLocalMs) / 1000);
+    world.setSeaTime?.(coopGuestSeaTimeBase + elapsed);
+  }
+
+  function advanceGuestWorld(dt) {
+    if (!coopGuestAuthoritative() || !coopGuestWorldReady || state.over) return;
+    ship.group.position.addScaledVector(sailing.velocity, dt);
+    ship.group.updateMatrixWorld(true);
+  }
+
   function serializeCoopWorld() {
     const dc = damageControl.getState?.() || {};
     return {
@@ -581,7 +668,7 @@ export async function startGame(container, hud) {
     if (seq && seq <= coopLastAppliedWorldSeq) return false;
     if (seq) coopLastAppliedWorldSeq = seq;
 
-    if (Number.isFinite(worldState.seaTime)) world.setSeaTime?.(worldState.seaTime);
+    if (Number.isFinite(worldState.seaTime)) syncGuestSeaTime(worldState.seaTime);
     if (Number.isFinite(worldState.waveHeightMultiplier)) {
       world.setWaveHeightMultiplier?.(worldState.waveHeightMultiplier);
     }
@@ -614,6 +701,7 @@ export async function startGame(container, hud) {
     if (state.over && !wasOver) hud.gameover.style.display = "flex";
     if (!state.over && wasOver) {
       hud.gameover.style.display = "none";
+      if (hud.restartButton) hud.restartButton.style.display = "none";
       sinkingOverlayShown = false;
     }
 
@@ -651,7 +739,10 @@ export async function startGame(container, hud) {
     const position = remoteActionPosition(event);
     if (!position) return;
     if (action === "scoop-water") {
-      damageControl.applyRemoteScoopWater?.(position);
+      damageControl.applyRemoteScoopWater?.(position, {
+        force: true,
+        amount: Number(event.payload?.amount) || 15,
+      });
     } else if (action === "patch-breach") {
       damageControl.applyRemotePatchBreach?.(position);
     }
@@ -698,6 +789,7 @@ export async function startGame(container, hud) {
       playerSinkTimer = 0;
       sinkingOverlayShown = false;
       hud.gameover.style.display = "none";
+      if (hud.restartButton) hud.restartButton.style.display = "none";
       coopGuestWorldReady = false;
     }
   });
@@ -738,7 +830,8 @@ export async function startGame(container, hud) {
       const remote = playerInfo.state || {};
       let worldPosition = null;
       if (isVecPayload(remote.localPosition)) {
-        worldPosition = ship.group.localToWorld(vecFromPayload(remote.localPosition));
+        const localPosition = vecFromPayload(remote.localPosition).add(coopSeatLocalOffset(playerInfo.seat).multiplyScalar(0.28));
+        worldPosition = ship.group.localToWorld(localPosition);
       } else if (isVecPayload(remote.position)) {
         worldPosition = vecFromPayload(remote.position);
       }
@@ -747,11 +840,18 @@ export async function startGame(container, hud) {
       let mesh = coopMeshes.get(playerInfo.id);
       if (!mesh) {
         mesh = makeRemotePlayerMesh(playerInfo.color || "#5ce58a", `P${playerInfo.seat || 2}`);
+        mesh.position.copy(worldPosition);
+        mesh.userData.targetPosition = worldPosition.clone();
+        mesh.userData.targetYaw = Number.isFinite(remote.yaw) ? remote.yaw : 0;
         scene.add(mesh);
         coopMeshes.set(playerInfo.id, mesh);
       }
-      mesh.position.copy(worldPosition);
-      mesh.rotation.y = Number.isFinite(remote.yaw) ? remote.yaw : 0;
+      mesh.userData.targetPosition?.copy(worldPosition);
+      mesh.userData.targetYaw = Number.isFinite(remote.yaw) ? remote.yaw : mesh.userData.targetYaw || 0;
+      const follow = 1 - Math.exp(-16 * Math.max(0, dt));
+      mesh.position.lerp(mesh.userData.targetPosition, follow);
+      const yawDelta = Math.atan2(Math.sin(mesh.userData.targetYaw - mesh.rotation.y), Math.cos(mesh.userData.targetYaw - mesh.rotation.y));
+      mesh.rotation.y += yawDelta * follow;
       mesh.visible = true;
       mesh.scale.setScalar(remote.insideHold ? 0.82 : 1);
     }
@@ -766,6 +866,11 @@ export async function startGame(container, hud) {
       requestRestart();
     }
   });
+  hud.restartButton?.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    requestRestart();
+  });
 
   // ---- main loop ----
   const clock = new THREE.Clock();
@@ -774,7 +879,11 @@ export async function startGame(container, hud) {
     const dt = Math.min(clock.getDelta(), 0.05);
     world.tuneForFrameTime?.(dt);
     const coopGuestWorld = coopGuestAuthoritative();
-    if (coopGuestWorld) applyHostWorldFromPeers();
+    if (coopGuestWorld) {
+      applyHostWorldFromPeers();
+      advanceGuestSeaTime();
+      advanceGuestWorld(dt);
+    }
     const playerInsideHold = damageControl.isInsideHold?.(player.rig.position) || false;
     damageControl.updateInteriorVisibility(player.rig.position);
     if (coopGuestWorld && !coopGuestWorldReady) {
@@ -826,6 +935,12 @@ export async function startGame(container, hud) {
       return;
     }
     if (!state.over) {
+      if (storyMode?.active) {
+        updateHud(dt);
+        updateCoop(dt);
+        renderer.render(scene, camera);
+        return;
+      }
       if (bonusSystem?.active) {
         updateHud(dt);
         updateCoop(dt);
@@ -887,7 +1002,8 @@ export async function startGame(container, hud) {
   function updateHud(dt) {
     const ps = player.getState();
     const dc = damageControl.getState();
-    const uiCursorActive = actionQuiz.active || Boolean(bonusSystem?.active) || islandQuest.active || player.questMode;
+    if (hud.restartButton) hud.restartButton.style.display = state.over ? "block" : "none";
+    const uiCursorActive = actionQuiz.active || Boolean(bonusSystem?.active) || Boolean(storyMode?.active) || islandQuest.active || player.questMode;
     hud.prompt.textContent = ps.prompt || "";
     hud.crosshair.style.display = uiCursorActive ? "none" : "block";
     hud.reloadWrap.style.display = ps.nearCannon ? "block" : "none";
@@ -931,19 +1047,30 @@ export async function startGame(container, hud) {
     hud.speedText.textContent = `${navigation.speed.toFixed(1)} м/с · паруса ${Math.round(navigation.throttle * 100)}%`;
     const toIsland = island.position.clone().sub(ship.group.position);
     const islandCannons = island.activeCannons().length;
-    setRelativeArrow(hud.compassArrow, toIsland);
-    hud.compassText.textContent = `Крепость: ${Math.round(toIsland.length())} м · пушек: ${islandCannons}`;
+    const islandVisible = Boolean(island.revealed || (storyMode?.isIslandVisible?.() ?? true));
+    if (hud.islandTeleportButton) hud.islandTeleportButton.style.display = islandVisible ? "block" : "none";
+    if (islandVisible) {
+      hud.compassArrow.style.opacity = "1";
+      setRelativeArrow(hud.compassArrow, toIsland);
+      hud.compassText.textContent = `Остров истории: ${Math.round(toIsland.length())} м · фразы ждут`;
 
-    announceHudAudio({
-      ps,
-      dc,
-      navigation,
-      enemyCount,
-      toIsland,
-      islandCannons,
-      windSpeed: mag,
-      dt,
-    });
+      announceHudAudio({
+        ps,
+        dc,
+        navigation,
+        enemyCount,
+        toIsland,
+        islandCannons,
+        windSpeed: mag,
+        dt,
+      });
+    } else {
+      hud.compassArrow.style.opacity = "0.28";
+      hud.compassArrow.style.transform = "rotate(0rad)";
+      hud.compassText.textContent = storyMode?.progressLabel?.() || "Остров скрыт: собери 5 фрагментов истории.";
+      audioState.islandPhase = "hidden";
+      audioState.questActive = false;
+    }
 
     if (msgTimer > 0) {
       msgTimer -= dt;
@@ -969,7 +1096,7 @@ export async function startGame(container, hud) {
     element.style.transform = `rotate(${relativeAngle}rad)`;
   }
 
-  setMessage("ЛКМ стреляет из ближайшей пушки. У штурвала нажми E, чтобы управлять курсом и парусами.");
+  setMessage(storyMode?.introLine?.() || "ЛКМ стреляет из ближайшей пушки. У штурвала нажми E, чтобы управлять курсом и парусами.");
   frame();
   return world;
 }

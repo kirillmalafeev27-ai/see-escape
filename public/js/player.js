@@ -149,6 +149,7 @@ export class PlayerController {
     this._candidate = new THREE.Vector3();
     this._landingProbe = new THREE.Vector3();
     this._lastSafePosition = new THREE.Vector3();
+    this._spawnOffset = new THREE.Vector3();
     this._hitPoint = new THREE.Vector3();
     this._viewDirection = new THREE.Vector3();
     this._inverseShip = new THREE.Matrix4();
@@ -252,7 +253,7 @@ export class PlayerController {
   }
 
   _applyTouchLook(dx, dy) {
-    this.yaw += dx * TOUCH_LOOK_SENS;
+    this.yaw -= dx * TOUCH_LOOK_SENS;
     this.pitch -= dy * TOUCH_LOOK_SENS;
     this.pitch = THREE.MathUtils.clamp(this.pitch, -1.3, 1.3);
   }
@@ -593,6 +594,15 @@ export class PlayerController {
     this.snapToDeck();
   }
 
+  setSpawnOffset(offset = null) {
+    this._spawnOffset.set(
+      Number.isFinite(offset?.x) ? offset.x : 0,
+      0,
+      Number.isFinite(offset?.z) ? offset.z : 0
+    );
+    this.snapToDeck();
+  }
+
   setQuestMode(active) {
     this.questMode = Boolean(active);
     this.activeCannon = null;
@@ -644,6 +654,8 @@ export class PlayerController {
 
   snapToDeck() {
     this._placeOnDeck();
+    this.rig.position.x += this._spawnOffset.x;
+    this.rig.position.z += this._spawnOffset.z;
     this._groundFollow(1 / 60);
     this._updateCameraHeight(1 / 60);
     this.camera.rotation.set(this.pitch, 0, 0);
@@ -831,7 +843,7 @@ export class PlayerController {
     }
     if (this.damageControl?.canScoopWater(this.rig)) {
       if (this.damageControl.scoopWater(this.rig, this.camera)) {
-        this._publishCoopAction("scoop-water");
+        this._publishCoopAction("scoop-water", { amount: 15 });
         this.verticalVelocity = 0;
         this.airborne = false;
         this._rememberSafePosition();
@@ -893,7 +905,7 @@ export class PlayerController {
 
   _scoopWater() {
     if (this.damageControl?.scoopWater(this.rig, this.camera)) {
-      this._publishCoopAction("scoop-water");
+      this._publishCoopAction("scoop-water", { amount: 15 });
       this.verticalVelocity = 0;
       this.airborne = false;
       this._rememberSafePosition();

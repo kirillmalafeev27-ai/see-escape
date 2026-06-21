@@ -121,6 +121,7 @@ export class IslandFortress {
     this.projectiles = projectiles;
     this.effects = effects;
     this.getPlayerTarget = getPlayerTarget;
+    this.revealed = true;
     this.group = new THREE.Group();
     this.group.name = "FortressIsland";
     this.group.position.copy(ISLAND_POSITION);
@@ -131,6 +132,11 @@ export class IslandFortress {
     this.decorLoading = false;
     this.decorLoaded = false;
     this._build();
+  }
+
+  setRevealed(value) {
+    this.revealed = Boolean(value);
+    this.group.visible = this.revealed;
   }
 
   _build() {
@@ -219,10 +225,12 @@ export class IslandFortress {
   }
 
   activeCannons() {
+    if (!this.revealed) return [];
     return this.cannons.filter((cannon) => !cannon.destroyed);
   }
 
   update(dt) {
+    if (!this.revealed) return;
     const player = this.getPlayerTarget();
     if (!this.decorLoaded && !this.decorLoading && player.pos.distanceTo(this.group.position) <= ISLAND_DECOR_LOAD_RANGE) {
       this._loadDecorModels();
@@ -234,6 +242,7 @@ export class IslandFortress {
   }
 
   hitTest(proj) {
+    if (!this.revealed) return null;
     for (const cannon of this.activeCannons()) {
       const point = cannon.mount.getWorldPosition(new THREE.Vector3());
       point.y += 2;
@@ -259,6 +268,7 @@ export class IslandFortress {
 
   snapshot() {
     return {
+      revealed: this.revealed,
       cannons: this.cannons.map((cannon) => ({
         destroyed: Boolean(cannon.destroyed),
         reload: cannon.reload,
@@ -268,6 +278,7 @@ export class IslandFortress {
   }
 
   syncFromSnapshot(snapshot = {}) {
+    if (typeof snapshot.revealed === "boolean") this.setRevealed(snapshot.revealed);
     const cannons = Array.isArray(snapshot.cannons) ? snapshot.cannons : [];
     for (let i = 0; i < this.cannons.length; i++) {
       const item = cannons[i] || {};

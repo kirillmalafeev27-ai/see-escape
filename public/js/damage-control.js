@@ -687,9 +687,11 @@ export class DamageControlSystem {
     this._updateFloodWater(0);
   }
 
-  applyRemoteScoopWater(position) {
-    if (!position || !this._canCollectWater(position) || this.waterLevel < 1) return false;
-    this.waterLevel = Math.max(0, this.waterLevel - BUCKET_AMOUNT);
+  applyRemoteScoopWater(position, options = {}) {
+    if (this.waterLevel < 1) return false;
+    if (!options.force && (!position || !this._canCollectWater(position))) return false;
+    const amount = Number.isFinite(options.amount) ? options.amount : BUCKET_AMOUNT;
+    this.waterLevel = Math.max(0, this.waterLevel - Math.max(1, amount));
     this._updateFloodWater(0);
     return true;
   }
