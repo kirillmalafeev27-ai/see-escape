@@ -279,6 +279,7 @@
       this.audioCursor = 0;
       this.generatedPools = savedPoolSnapshot?.generatedPools || Object.create(null);
       this.sharedDeck = null;
+      this.sharedDeckStartFloor = 1;
       this.sharedDeckSignature = '';
       this.lastSharedDeckConfig = null;
       this.fetching = Object.create(null);
@@ -300,6 +301,7 @@
         this.generatedPools = Object.create(null);
         this.usedDisplays = Object.create(null);
         this.sharedDeck = null;
+        this.sharedDeckStartFloor = 1;
         this.sharedDeckSignature = '';
         this.lastSharedDeckConfig = null;
       }
@@ -366,7 +368,7 @@
       const slot = this.slotForBridge(startFloor);
       if (window.SeaCoop?.enabled && !window.SeaCoop.isHost) {
         window.SeaCoop.updateUi?.("Ждём общие задания от капитана комнаты...", "warn");
-        const deck = await this.waitForSharedDeck(floors, 12000);
+        const deck = await this.waitForSharedDeck(floors, 12000, startFloor);
         if (deck?.length) return { ok: true, generated: true, shared: true };
         const error = new Error("Общие задания ещё не готовы. Пусть первый игрок нажмёт старт и подготовит колоду.");
         error.sharedDeckPending = true;
@@ -375,7 +377,7 @@
       }
       if (!this.status.generationConfigured) {
         this.seedFallbackPool(slot, floors);
-        this.buildSharedDeck(slot, floors);
+        this.buildSharedDeck(slot, floors, startFloor);
         this.publishSharedDeck(floors, startFloor);
         this.saveRestartPoolSnapshot();
         this.renderSettingsMenu();
@@ -388,12 +390,12 @@
         const pool = await this.ensurePool(slot, floors, floors);
         if ((pool?.length || 0) < floors) {
           this.seedFallbackPool(slot, floors);
-          this.buildSharedDeck(slot, floors);
+          this.buildSharedDeck(slot, floors, startFloor);
           this.publishSharedDeck(floors, startFloor);
           this.saveRestartPoolSnapshot();
           return { ok: true, generated: false };
         }
-        this.buildSharedDeck(slot, floors);
+        this.buildSharedDeck(slot, floors, startFloor);
         this.publishSharedDeck(floors, startFloor);
         this.saveRestartPoolSnapshot();
         return { ok: true, generated: true };
@@ -421,23 +423,44 @@
       savePoolSnapshot(this.settings, this.generatedPools);
     }
 
-    sharedQuestion(floor = 1) {
-      if (!this.sharedDeck?.length) return null;
-      const index = Math.max(0, Math.min(this.sharedDeck.length - 1, Number(floor || 1) - 1));
-      const question = this.sharedDeck[index];
-      return question ? JSON.parse(JSON.stringify(question)) : null;
+    normalizedFloor(floor = 1) {
+      return Math.max(1, Math.floor(Number(floor) || 1));
     }
 
-    buildSharedDeck(slot, count = 15) {
+    sharedDeckHasRange(startFloor = 1, count = 1) {
+      if (!this.sharedDeck?.length) return false;
+      const index = this.normalizedFloor(startFloor) - this.sharedDeckStartFloor;
+      return index >= 0 && index + Math.max(1, Number(count) || 1) <= this.sharedDeck.length;
+    }
+
+    rememberUsedDisplay(key, value) {
+      if (!key || !value) return;
+      const used = this.usedDisplays[key] || new Set();
+      used.add(value);
+      this.usedDisplays[key] = used;
+    }
+
+    sharedQuestion(floor = 1) {
+      if (!this.sharedDeck?.length) return null;
+      const index = this.normalizedFloor(floor) - this.sharedDeckStartFloor;
+      if (index < 0 || index >= this.sharedDeck.length) return null;
+      const question = this.sharedDeck[index];
+      if (!question) return null;
+      this.rememberUsedDisplay(question.poolKey, question.display || question.raw?.display);
+      return JSON.parse(JSON.stringify(question));
+    }
+
+    buildSharedDeck(slot, count = 15, startFloor = 1) {
       const key = this.slotKey(slot);
       if ((this.generatedPools[key]?.length || 0) < count) this.seedFallbackPool(slot, count);
-      const rawQuestions = (this.generatedPools[key] || []).slice(0, count);
+      const rawQuestions = (this.generatedPools[key] || []).splice(0, count);
       this.sharedDeck = rawQuestions.map((raw) => this.formatGrammarQuestion(raw, slot, true, key));
+      this.sharedDeckStartFloor = this.normalizedFloor(startFloor);
       this.sharedDeckSignature = settingsSignature(this.settings);
       return this.sharedDeck;
     }
 
-    publishSharedDeck(floors = 15, startFloor = 1) {
+    publishSharedDeck(floors = 15, startFloor = this.sharedDeckStartFloor || 1) {
       if (!this.sharedDeck?.length) return false;
       this.lastSharedDeckConfig = {
         signature: this.sharedDeckSignature || settingsSignature(this.settings),
@@ -454,7 +477,7 @@
     republishSharedDeck() {
       if (!window.SeaCoop?.enabled || !window.SeaCoop.isHost) return false;
       if (!this.lastSharedDeckConfig && this.sharedDeck?.length) {
-        this.publishSharedDeck(this.sharedDeck.length, 1);
+        this.publishSharedDeck(this.sharedDeck.length, this.sharedDeckStartFloor || 1);
         return true;
       }
       if (!this.lastSharedDeckConfig) return false;
@@ -490,23 +513,24 @@
         .filter(Boolean);
       if (!valid.length) return false;
       this.sharedDeck = valid;
+      this.sharedDeckStartFloor = this.normalizedFloor(config.startFloor || 1);
       this.sharedDeckSignature = config.signature || settingsSignature(this.settings);
-      this.lastSharedDeckConfig = { ...config, questions: valid };
+      this.lastSharedDeckConfig = { ...config, startFloor: this.sharedDeckStartFloor, questions: valid };
       this.generationAllowed = true;
       this.renderSettingsMenu();
       return true;
     }
 
-    async waitForSharedDeck(count = 1, timeoutMs = 8000) {
+    async waitForSharedDeck(count = 1, timeoutMs = 8000, startFloor = 1) {
       const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
       const applyAvailable = async () => {
         const existing = window.SeaCoop?.configForKey?.(COOP_DECK_KEY);
         if (existing) this.applySharedDeck(existing);
-        if ((this.sharedDeck?.length || 0) >= count) return true;
+        if (this.sharedDeckHasRange(startFloor, count)) return true;
         await window.SeaCoop?.refreshRoomState?.();
         const refreshed = window.SeaCoop?.configForKey?.(COOP_DECK_KEY);
         if (refreshed) this.applySharedDeck(refreshed);
-        return (this.sharedDeck?.length || 0) >= count;
+        return this.sharedDeckHasRange(startFloor, count);
       };
       if (await applyAvailable()) return this.sharedDeck;
 
@@ -514,7 +538,11 @@
       let lastRequest = 0;
       while (Date.now() - start < timeoutMs) {
         if (Date.now() - lastRequest > 1000) {
-          window.SeaCoop?.publishEvent?.("request-config", { key: COOP_DECK_KEY });
+          window.SeaCoop?.publishEvent?.("request-config", {
+            key: COOP_DECK_KEY,
+            startFloor: this.normalizedFloor(startFloor),
+            count: Math.max(1, Number(count) || 1),
+          });
           lastRequest = Date.now();
         }
         await sleep(160);
@@ -543,9 +571,7 @@
       const pool = this.generatedPools[key];
       if (!pool || !pool.length) return null;
       const raw = pool.shift();
-      const used = this.usedDisplays[key] || new Set();
-      used.add(raw.display);
-      this.usedDisplays[key] = used;
+      this.rememberUsedDisplay(key, raw.display);
       return this.formatGrammarQuestion(raw, slot, true, key);
     }
 
@@ -553,9 +579,7 @@
       const pool = this.generatedPools[key];
       if (!pool || !pool.length) return null;
       const raw = pool.shift();
-      const used = this.usedDisplays[key] || new Set();
-      used.add(raw.audioText || raw.display);
-      this.usedDisplays[key] = used;
+      this.rememberUsedDisplay(key, raw.audioText || raw.display);
       return this.formatAudioQuestion(raw, true, key);
     }
 
@@ -574,7 +598,7 @@
     }
 
     poolHasQuestion(context = {}) {
-      if (this.sharedDeck?.length) return true;
+      if (this.sharedDeckHasRange(context.floor || 1, 1)) return true;
       if (!this.generationAllowed) return true;
       if (!this.status.generationConfigured) return true;
       const key = this.slotKey(this.slotForBridge(context.floor || 0));
@@ -582,11 +606,38 @@
     }
 
     async ensureQuestionAvailable(context = {}) {
-      if (this.sharedDeck?.length) return;
+      const floor = this.normalizedFloor(context.floor || 1);
+      if (this.sharedDeckHasRange(floor, 1)) return;
+      await this.statusPromise;
       if (!this.generationAllowed) return;
-      if (!this.status.generationConfigured) return;
-      const slot = this.slotForBridge(context.floor || 0);
-      await this.ensurePool(slot, 1, 10);
+      const batchSize = Math.max(1, Math.min(20, Number(this.lastSharedDeckConfig?.floors) || 15));
+      if (window.SeaCoop?.enabled && !window.SeaCoop.isHost) {
+        const deck = await this.waitForSharedDeck(1, 12000, floor);
+        if (deck && this.sharedDeckHasRange(floor, 1)) return;
+        const error = new Error("Новый набор заданий ещё не готов. Пусть первый игрок подготовит следующую колоду.");
+        error.sharedDeckPending = true;
+        throw error;
+      }
+      const slot = this.slotForBridge(floor);
+      if (!this.status.generationConfigured) {
+        this.seedFallbackPool(slot, batchSize);
+        this.buildSharedDeck(slot, batchSize, floor);
+        this.publishSharedDeck(batchSize, floor);
+        this.saveRestartPoolSnapshot();
+        return;
+      }
+      this.preparing = true;
+      this.renderSettingsMenu();
+      try {
+        const pool = await this.ensurePool(slot, batchSize, batchSize);
+        if ((pool?.length || 0) < batchSize) this.seedFallbackPool(slot, batchSize);
+        this.buildSharedDeck(slot, batchSize, floor);
+        this.publishSharedDeck(batchSize, floor);
+        this.saveRestartPoolSnapshot();
+      } finally {
+        this.preparing = false;
+        this.renderSettingsMenu();
+      }
     }
 
     ensurePool(slot, minCount = 1, requestCount = 10) {
@@ -918,8 +969,17 @@
   function attachCoopDeckResponder() {
     if (!window.SeaCoop?.onEvent || attachCoopDeckResponder.attached) return Boolean(attachCoopDeckResponder.attached);
     attachCoopDeckResponder.attached = true;
-    window.SeaCoop.onEvent((event) => {
+    window.SeaCoop.onEvent(async (event) => {
       if (event?.name !== 'request-config' || event?.payload?.key !== COOP_DECK_KEY) return;
+      const startFloor = bank.normalizedFloor(event.payload.startFloor || event.payload.floor || 1);
+      const count = Math.max(1, Number(event.payload.count) || 1);
+      try {
+        if (window.SeaCoop?.isHost && !bank.sharedDeckHasRange(startFloor, count)) {
+          await bank.ensureQuestionAvailable({ floor: startFloor });
+        }
+      } catch (error) {
+        console.warn('Sea quiz deck refresh failed:', error);
+      }
       bank.republishSharedDeck();
     });
     return true;
