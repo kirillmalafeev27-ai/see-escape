@@ -51,19 +51,28 @@ function shuffle(value) {
 }
 
 export class BonusSystem {
-  constructor({ hud, state, systems, onMessage }) {
+  constructor({ hud, state, systems, onMessage, onSelect }) {
     this.hud = hud;
     this.state = state;
     this.systems = systems;
     this.onMessage = onMessage || (() => {});
+    this.onSelect = onSelect || null;
     this.active = false;
     this.choices = [];
+    this.token = "";
   }
 
-  showChoices() {
+  showChoices(options = {}) {
     if (!this.hud?.bonusChoice || this.active) return;
+    const requestedChoices = Array.isArray(options.choices)
+      ? options.choices
+          .map((item) => typeof item === "string" ? item : item?.id)
+          .map((id) => BONUS_POOL.find((bonus) => bonus.id === id))
+          .filter(Boolean)
+      : [];
     this.active = true;
-    this.choices = shuffle(BONUS_POOL).slice(0, 3);
+    this.token = String(options.token || `${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    this.choices = (requestedChoices.length ? requestedChoices : shuffle(BONUS_POOL)).slice(0, 3);
     this.hud.bonusCards.innerHTML = "";
     for (const bonus of this.choices) {
       const button = document.createElement("button");
@@ -74,19 +83,33 @@ export class BonusSystem {
       button.addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();
-        this.apply(bonus.id);
+        const choiceIds = this.choices.map((item) => item.id);
+        if (this.onSelect?.(bonus.id, { token: this.token, choices: choiceIds, bonus }) === false) {
+          this.lock("Ждём синхронизацию выбора...");
+          return;
+        }
+        this.apply(bonus.id, { token: this.token });
       });
       this.hud.bonusCards.appendChild(button);
     }
     this.hud.bonusChoice.style.display = "flex";
-    const options = this.choices
+    const optionsText = this.choices
       .map((bonus, index) => `${index + 1}: ${bonus.title}. ${bonus.description}`)
       .join(" ");
-    this.onMessage(`Выбери один трофейный бонус. ${options}`);
+    this.onMessage(`Выбери один трофейный бонус. ${optionsText}`);
     this.systems.player?.enterCursorMode?.();
+    return { token: this.token, choices: this.choices.map((bonus) => bonus.id) };
   }
 
-  apply(id) {
+  lock(message = "Ждём выбор команды...") {
+    if (!this.active || !this.hud?.bonusChoice) return;
+    this.hud.bonusCards.querySelectorAll("button").forEach((button) => {
+      button.disabled = true;
+    });
+    this.onMessage(message);
+  }
+
+  apply(id, _options = {}) {
     const bonus = BONUS_POOL.find((item) => item.id === id);
     if (!bonus) return;
     const bonuses = this.state.bonuses;
@@ -101,12 +124,14 @@ export class BonusSystem {
     if (id === "hand-cannon") this.systems.player.addHandCannonCharges(3);
     this.hud.bonusChoice.style.display = "none";
     this.active = false;
+    this.token = "";
     this.onMessage(`Бонус выбран: ${bonus.title}.`);
   }
 
   reset() {
     this.active = false;
     this.choices = [];
+    this.token = "";
     if (this.hud?.bonusChoice) this.hud.bonusChoice.style.display = "none";
   }
 }

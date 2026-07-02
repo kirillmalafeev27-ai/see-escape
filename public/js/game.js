@@ -12,14 +12,14 @@ import { DamageControlSystem } from "./damage-control.js?v=20260620-coop-touch-f
 import { loadAndAnalyzeShip } from "./models.js?v=20260607-assets-fire-v1";
 import { applyCollisionProfile, loadAppliedCollisionProfile } from "./collision-profile.js?v=20260609-remove-hold-helpers-v1";
 import { SailingSystem } from "./sailing.js?v=20260603-bonuses-island-v1";
-import { TreasureSystem } from "./treasure.js?v=20260620-story-treasure-v1";
+import { TreasureSystem } from "./treasure.js?v=20260702-coop-story-sync-v1";
 import { IslandFortress } from "./island.js?v=20260620-story-treasure-v1";
-import { BonusSystem } from "./bonuses.js?v=20260619-authoritative-coop-v2";
+import { BonusSystem } from "./bonuses.js?v=20260702-coop-story-sync-v1";
 import { IslandQuestSystem } from "./island-quest.js?v=20260620-story-treasure-v1";
 import { applyCannonLayout, loadCannonLayout } from "./cannon-layout.js?v=20260609-default-profile-v2";
 import { AudioGuide } from "./audio-guide.js?v=20260615-once-hints-v1";
 import { ActionQuizGate } from "./action-quiz.js?v=20260617-island-action-quiz-v1";
-import { StoryTreasureMode } from "./story-treasures.js?v=20260620-story-treasure-v1";
+import { StoryTreasureMode } from "./story-treasures.js?v=20260702-coop-story-sync-v1";
 
 function playerLabelTexture(text, color = "#5ce58a") {
   const canvas = document.createElement("canvas");
@@ -211,6 +211,9 @@ export async function startGame(container, hud) {
   };
   let bonusSystem = null;
   let storyMode = null;
+  let activeStoryToken = "";
+  const closedStoryTokens = new Set();
+  const appliedBonusTokens = new Set();
   let playerShipSinking = false;
   let playerSinkTimer = 0;
   let sinkingOverlayShown = false;
@@ -228,23 +231,8 @@ export async function startGame(container, hud) {
         : { center: null }
     );
   }
-  const treasures = new TreasureSystem(scene, sampleWaveHeight, () => {
-    state.treasures++;
-    const fragment = storyMode?.collect({
-      onAfterRead: ({ complete } = {}) => {
-        if (!complete) bonusSystem?.showChoices();
-      },
-    });
-    if (fragment) {
-      setMessage(`Сюжетное сокровище ${state.treasures}: фрагмент ${fragment.level} поднят на борт.`, {
-        voice: true,
-        id: `story-fragment-${state.treasures}`,
-        priority: 2,
-      });
-    } else {
-      setMessage("Сундук с сокровищами поднят на борт.");
-      bonusSystem?.showChoices();
-    }
+  const treasures = new TreasureSystem(scene, sampleWaveHeight, (pickup) => {
+    handleTreasureCollected(pickup);
   });
 
   // Enemy GLB loads in the background; primitive enemies are good enough until it arrives.
@@ -287,7 +275,7 @@ export async function startGame(container, hud) {
     sampleWaveHeight,
     raiderShipFactory: enemyFactory,
     requestActionQuiz: (action, context) => actionQuiz.request(action, context),
-    beforeBegin: () => storyMode?.handleIslandEntry({ onSolved: () => winAtIsland() }) ?? false,
+    beforeBegin: () => handleStoryIslandEntry(),
     onMessage: (m) => m && setMessage(m),
     onComplete: () => {
       state.treasures += 3;
@@ -349,7 +337,166 @@ export async function startGame(container, hud) {
     state,
     systems: { sailing, player, damageControl },
     onMessage: (m) => m && setMessage(m),
+    onSelect: (id, meta) => handleBonusChoice(id, meta),
   });
+
+  function makeSyncToken(prefix) {
+    return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  }
+
+  function storyOpenPayload(token, fragment) {
+    const fragmentIndex = Math.max(0, storyMode.fragments.findIndex((item) => item.id === fragment?.id));
+    return {
+      token,
+      runIndex: storyMode.runIndex,
+      runId: storyMode.run?.id || "",
+      level: storyMode.level,
+      fragmentIndex,
+      fragmentId: fragment?.id || "",
+      collected: storyMode.collected,
+      storyComplete: storyMode.storyComplete,
+      islandRevealed: storyMode.islandRevealed,
+      orderSolved: storyMode.orderSolved,
+      treasures: state.treasures,
+    };
+  }
+
+  function requestStoryClose(token) {
+    if (!coop?.enabled) return true;
+    if (coop.isHost) {
+      finalizeStoryClose(token);
+    } else {
+      coop.publishEvent?.("story-fragment-close-request", { token });
+      setMessage("Ждём команду: закрываем фрагмент у всех игроков...");
+    }
+    return false;
+  }
+
+  function finalizeStoryClose(token, options = {}) {
+    const cleanToken = String(token || activeStoryToken || "");
+    if (cleanToken && closedStoryTokens.has(cleanToken)) return;
+    if (cleanToken) closedStoryTokens.add(cleanToken);
+    const wasComplete = Boolean(storyMode?.storyComplete);
+    storyMode?.closeFragment?.({ notify: false });
+    if (wasComplete) setStoryIslandVisible(true);
+    if (coop?.enabled && options.publish !== false) {
+      coop.publishEvent?.("story-fragment-close", {
+        token: cleanToken,
+        story: storyMode?.snapshot?.(),
+      });
+    }
+    activeStoryToken = "";
+    if (!wasComplete) openBonusChoices({ reason: `story-${cleanToken || Date.now()}` });
+    updateCoop(0);
+  }
+
+  function openBonusChoices({ reason = "treasure", choices = null, token = "" } = {}) {
+    if (!bonusSystem) return null;
+    const bonusToken = token || makeSyncToken(`bonus-${reason}`);
+    const opened = bonusSystem.showChoices({ token: bonusToken, choices });
+    if (!opened) return null;
+    if (coop?.enabled && coop.isHost) {
+      coop.publishEvent?.("bonus-open", {
+        token: opened.token,
+        choices: opened.choices,
+      });
+    }
+    return opened;
+  }
+
+  function handleBonusChoice(id, meta = {}) {
+    if (!coop?.enabled) return true;
+    if (coop.isHost) {
+      finalizeBonusSelection(meta.token, id);
+    } else {
+      coop.publishEvent?.("bonus-select-request", {
+        token: meta.token,
+        id,
+      });
+      setMessage("Ждём команду: применяем бонус у всех игроков...");
+    }
+    return false;
+  }
+
+  function finalizeBonusSelection(token, id, options = {}) {
+    const cleanToken = String(token || bonusSystem?.token || "");
+    if (cleanToken && appliedBonusTokens.has(cleanToken)) return;
+    if (cleanToken) appliedBonusTokens.add(cleanToken);
+    bonusSystem?.apply(id, { token: cleanToken });
+    if (coop?.enabled && options.publish !== false) {
+      coop.publishEvent?.("bonus-apply", {
+        token: cleanToken,
+        id,
+        bonuses: { ...state.bonuses },
+      });
+    }
+    updateCoop(0);
+  }
+
+  function handleTreasureCollected(_pickup = {}) {
+    if (coopGuestAuthoritative()) return;
+    state.treasures++;
+    const token = makeSyncToken("story");
+    activeStoryToken = token;
+    const fragment = storyMode?.collect({
+      onBeforeClose: () => requestStoryClose(token),
+      onAfterRead: ({ complete } = {}) => {
+        if (!coop?.enabled && !complete) openBonusChoices({ reason: `story-${token}` });
+      },
+    });
+    if (fragment) {
+      if (coop?.enabled && coop.isHost) coop.publishEvent?.("story-fragment-open", storyOpenPayload(token, fragment));
+      setMessage(`Сюжетное сокровище ${state.treasures}: фрагмент ${fragment.level} поднят на борт.`, {
+        voice: true,
+        id: `story-fragment-${state.treasures}`,
+        priority: 2,
+      });
+    } else {
+      setMessage("Сундук с сокровищами поднят на борт.");
+      openBonusChoices({ reason: `extra-${state.treasures}` });
+    }
+  }
+
+  function finalizeStoryOrderSolved(options = {}) {
+    storyMode.orderSolved = true;
+    if (coop?.enabled && options.publish !== false) {
+      coop.publishEvent?.("story-order-solved", {
+        story: storyMode?.snapshot?.(),
+      });
+    }
+    winAtIsland();
+    updateCoop(0);
+  }
+
+  function handleStoryOrderSolved() {
+    if (!coop?.enabled) {
+      winAtIsland();
+      return;
+    }
+    if (coop.isHost) {
+      finalizeStoryOrderSolved();
+    } else {
+      coop.publishEvent?.("story-order-solved-request", {});
+      setMessage("Ждём команду: завершаем островное сокровище у всех игроков...");
+    }
+  }
+
+  function handleStoryIslandEntry() {
+    const handled = storyMode?.handleIslandEntry({ onSolved: () => handleStoryOrderSolved() }) ?? false;
+    if (
+      handled &&
+      coop?.enabled &&
+      storyMode?.activeKind === "order" &&
+      storyMode?.storyComplete &&
+      storyMode?.isIslandVisible?.() &&
+      !storyMode?.orderSolved
+    ) {
+      coop.publishEvent?.("story-order-open", {
+        story: storyMode.snapshot?.(),
+      });
+    }
+    return handled;
+  }
 
   // ---- collisions / hit resolution ----
   const projEnv = {
@@ -496,6 +643,9 @@ export async function startGame(container, hud) {
     state.treasures = 0;
     state.over = false;
     state.bonuses = {};
+    activeStoryToken = "";
+    closedStoryTokens.clear();
+    appliedBonusTokens.clear();
     playerShipSinking = false;
     playerSinkTimer = 0;
     sinkingOverlayShown = false;
@@ -651,6 +801,7 @@ export async function startGame(container, hud) {
       wind: vecPayload(wind),
       score: state.score,
       treasures: state.treasures,
+      bonuses: { ...state.bonuses },
       over: state.over,
       playerShipSinking,
       playerSinkTimer,
@@ -658,7 +809,16 @@ export async function startGame(container, hud) {
       damage: damageControl.snapshot?.() || dc,
       enemies: fleet.snapshot?.() || [],
       projectiles: projectiles.snapshot?.() || [],
+      treasuresList: treasures.snapshot?.() || [],
       island: island.snapshot?.() || {},
+      story: storyMode?.snapshot ? { ...storyMode.snapshot(), token: activeStoryToken } : null,
+      bonus: bonusSystem?.active
+        ? {
+            active: true,
+            token: bonusSystem.token,
+            choices: bonusSystem.choices.map((bonus) => bonus.id),
+          }
+        : { active: false },
     };
   }
 
@@ -692,6 +852,9 @@ export async function startGame(container, hud) {
 
     if (Number.isFinite(worldState.score)) state.score = worldState.score;
     if (Number.isFinite(worldState.treasures)) state.treasures = worldState.treasures;
+    if (worldState.bonuses && typeof worldState.bonuses === "object") {
+      state.bonuses = { ...state.bonuses, ...worldState.bonuses };
+    }
     if (worldState.damage) damageControl.syncFromSnapshot?.(worldState.damage);
     else if (Number.isFinite(worldState.flood)) damageControl.waterLevel = worldState.flood;
     playerShipSinking = Boolean(worldState.playerShipSinking);
@@ -707,7 +870,33 @@ export async function startGame(container, hud) {
 
     fleet.syncFromSnapshot?.(worldState.enemies || []);
     projectiles.syncFromSnapshot?.(worldState.projectiles || []);
+    treasures.syncFromSnapshot?.(worldState.treasuresList || []);
     island.syncFromSnapshot?.(worldState.island || {});
+    if (worldState.story) {
+      storyMode?.applySnapshot?.(worldState.story, { preserveActive: true });
+      if (storyMode?.isIslandVisible?.()) setStoryIslandVisible(true);
+      if (
+        worldState.story.active &&
+        worldState.story.activeKind === "fragment" &&
+        !storyMode?.active
+      ) {
+        activeStoryToken = String(worldState.story.token || "");
+        storyMode?.openFragmentFromSync?.(
+          {
+            ...worldState.story,
+            fragmentIndex: worldState.story.currentFragmentIndex,
+          },
+          { onBeforeClose: () => requestStoryClose(activeStoryToken) }
+        );
+      }
+    }
+    if (worldState.bonus?.active && !bonusSystem?.active) {
+      openBonusChoices({
+        token: worldState.bonus.token,
+        choices: worldState.bonus.choices,
+        reason: "snapshot",
+      });
+    }
     if (!coopGuestDeckSnapped && player) {
       player.snapToDeck?.();
       coopGuestDeckSnapped = true;
@@ -773,6 +962,74 @@ export async function startGame(container, hud) {
     }
     if (event.name === "coop-action") {
       applyRemoteCoopAction(event);
+      return;
+    }
+    if (event.name === "story-fragment-open") {
+      if (event.source === coop.playerId) return;
+      const payload = event.payload || {};
+      if (Number.isFinite(payload.treasures)) state.treasures = payload.treasures;
+      activeStoryToken = String(payload.token || "");
+      storyMode?.openFragmentFromSync?.(payload, {
+        onBeforeClose: () => requestStoryClose(activeStoryToken),
+      });
+      setMessage(`Сюжетное сокровище ${state.treasures}: фрагмент поднят на борт.`, {
+        voice: true,
+        id: `story-fragment-${state.treasures}`,
+        priority: 2,
+      });
+      return;
+    }
+    if (event.name === "story-fragment-close-request") {
+      if (coop?.isHost && event.source !== coop.playerId) {
+        finalizeStoryClose(event.payload?.token);
+      }
+      return;
+    }
+    if (event.name === "story-fragment-close") {
+      if (event.source === coop.playerId) return;
+      if (event.payload?.story) storyMode?.applySnapshot?.(event.payload.story, { preserveActive: true });
+      storyMode?.closeFragment?.({ notify: false });
+      if (storyMode?.isIslandVisible?.()) setStoryIslandVisible(true);
+      activeStoryToken = "";
+      return;
+    }
+    if (event.name === "bonus-open") {
+      if (event.source === coop.playerId) return;
+      const payload = event.payload || {};
+      openBonusChoices({
+        token: payload.token,
+        choices: payload.choices,
+        reason: "remote",
+      });
+      return;
+    }
+    if (event.name === "bonus-select-request") {
+      if (coop?.isHost && event.source !== coop.playerId) {
+        finalizeBonusSelection(event.payload?.token, event.payload?.id);
+      }
+      return;
+    }
+    if (event.name === "bonus-apply") {
+      if (event.source === coop.playerId) return;
+      finalizeBonusSelection(event.payload?.token, event.payload?.id, { publish: false });
+      return;
+    }
+    if (event.name === "story-order-open") {
+      if (event.source === coop.playerId) return;
+      if (event.payload?.story) storyMode?.applySnapshot?.(event.payload.story, { preserveActive: true });
+      storyMode?.handleIslandEntry?.({ onSolved: () => handleStoryOrderSolved() });
+      return;
+    }
+    if (event.name === "story-order-solved-request") {
+      if (coop?.isHost && event.source !== coop.playerId) {
+        finalizeStoryOrderSolved();
+      }
+      return;
+    }
+    if (event.name === "story-order-solved") {
+      if (event.source === coop.playerId) return;
+      if (event.payload?.story) storyMode?.applySnapshot?.(event.payload.story, { preserveActive: true });
+      finalizeStoryOrderSolved({ publish: false });
       return;
     }
     if (event.name === "restart-request") {

@@ -359,6 +359,10 @@ export class StoryTreasureMode {
     this.islandRevealed = false;
     this.orderSolved = false;
     this.runWon = false;
+    this.activeKind = "";
+    this.currentFragmentIndex = -1;
+    this.fragmentBeforeClose = null;
+    this.fragmentAfterRead = null;
   }
 
   get total() {
@@ -379,7 +383,51 @@ export class StoryTreasureMode {
     this.islandRevealed = false;
     this.orderSolved = false;
     this.runWon = false;
+    this.activeKind = "";
+    this.currentFragmentIndex = -1;
+    this.fragmentBeforeClose = null;
+    this.fragmentAfterRead = null;
     this._hidePanel();
+  }
+
+  setRunContext({ runIndex = this.runIndex, level = this.level } = {}) {
+    this.runIndex = normalizeIndex(runIndex);
+    this.run = STORY_TREASURE_RUNS[this.runIndex];
+    this.level = STORY_LEVELS.includes(level) ? level : readSelectedLevel();
+    this.fragments = runFragments(this.run, this.level);
+  }
+
+  snapshot() {
+    return {
+      runIndex: this.runIndex,
+      runId: this.run?.id || "",
+      level: this.level,
+      collected: this.collected,
+      total: this.total,
+      storyComplete: this.storyComplete,
+      islandRevealed: this.islandRevealed,
+      orderSolved: this.orderSolved,
+      runWon: this.runWon,
+      active: this.active,
+      activeKind: this.activeKind,
+      currentFragmentIndex: this.currentFragmentIndex,
+    };
+  }
+
+  applySnapshot(snapshot = {}, options = {}) {
+    if (!snapshot || typeof snapshot !== "object") return;
+    this.setRunContext({
+      runIndex: Number.isFinite(snapshot.runIndex) ? snapshot.runIndex : this.runIndex,
+      level: STORY_LEVELS.includes(snapshot.level) ? snapshot.level : this.level,
+    });
+    if (Number.isFinite(snapshot.collected)) {
+      this.collected = Math.max(0, Math.min(this.total, Math.floor(snapshot.collected)));
+    }
+    this.storyComplete = Boolean(snapshot.storyComplete) || this.collected >= this.total;
+    this.islandRevealed = Boolean(snapshot.islandRevealed);
+    this.orderSolved = Boolean(snapshot.orderSolved);
+    this.runWon = Boolean(snapshot.runWon);
+    if (!options.preserveActive && !snapshot.active) this._hidePanel();
   }
 
   markVictory() {
@@ -398,7 +446,7 @@ export class StoryTreasureMode {
     return `Режим сокровищ: потопи врагов, подбери 5 сундуков и прочитай историю от начала до конца. Вся история написана на выбранном уровне: ${this.level}.`;
   }
 
-  collect({ onAfterRead } = {}) {
+  collect({ onAfterRead, onBeforeClose } = {}) {
     if (this.collected >= this.total) {
       this.onMessage("История уже собрана. Лишний сундук можно взять как обычный трофей.");
       onAfterRead?.({ complete: true, extra: true });
@@ -406,9 +454,27 @@ export class StoryTreasureMode {
     }
 
     const fragment = this.fragments[this.collected];
+    this.currentFragmentIndex = this.collected;
     this.collected += 1;
     this.storyComplete = this.collected >= this.total;
-    this._showFragment(fragment, onAfterRead);
+    this._showFragment(fragment, { onAfterRead, onBeforeClose });
+    return fragment;
+  }
+
+  openFragmentFromSync(payload = {}, callbacks = {}) {
+    this.setRunContext({
+      runIndex: Number.isFinite(payload.runIndex) ? payload.runIndex : this.runIndex,
+      level: STORY_LEVELS.includes(payload.level) ? payload.level : this.level,
+    });
+    const index = Math.max(0, Math.min(this.total - 1, Number(payload.fragmentIndex) || 0));
+    const fragment = this.fragments[index];
+    if (!fragment) return null;
+    this.currentFragmentIndex = index;
+    this.collected = Math.max(index + 1, Math.min(this.total, Number(payload.collected) || index + 1));
+    this.storyComplete = Boolean(payload.storyComplete) || this.collected >= this.total;
+    this.islandRevealed = Boolean(payload.islandRevealed);
+    this.orderSolved = Boolean(payload.orderSolved);
+    this._showFragment(fragment, callbacks);
     return fragment;
   }
 
@@ -429,8 +495,11 @@ export class StoryTreasureMode {
     return true;
   }
 
-  _showFragment(fragment, onAfterRead) {
+  _showFragment(fragment, callbacks = {}) {
     this.active = true;
+    this.activeKind = "fragment";
+    this.fragmentBeforeClose = callbacks.onBeforeClose || null;
+    this.fragmentAfterRead = callbacks.onAfterRead || null;
     this.enterCursorMode();
     const count = this.collected;
     const done = this.storyComplete;
@@ -458,21 +527,32 @@ export class StoryTreasureMode {
     this.panel.querySelector("[data-story-close]")?.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
-      this._closeFragment(onAfterRead);
+      this.closeFragment();
     });
   }
 
-  _closeFragment(onAfterRead) {
+  closeFragment({ notify = true } = {}) {
+    if (this.activeKind !== "fragment") {
+      this._hidePanel();
+      return;
+    }
+    if (notify && this.fragmentBeforeClose?.({ complete: this.storyComplete, run: this.run }) === false) return;
+    const afterRead = this.fragmentAfterRead;
+    this.fragmentBeforeClose = null;
+    this.fragmentAfterRead = null;
+    this.currentFragmentIndex = -1;
     this._hidePanel();
     if (this.storyComplete && !this.islandRevealed) {
       this.islandRevealed = true;
       this.onRevealIsland(this.run);
     }
-    onAfterRead?.({ complete: this.storyComplete });
+    if (notify) afterRead?.({ complete: this.storyComplete });
   }
 
   _showOrderPuzzle(onSolved) {
     this.active = true;
+    this.activeKind = "order";
+    this.currentFragmentIndex = -1;
     this.enterCursorMode();
     const correctIds = this.fragments.map((fragment) => fragment.id);
     const shuffledIds = shuffle(correctIds);
@@ -556,6 +636,8 @@ export class StoryTreasureMode {
 
   _hidePanel() {
     this.active = false;
+    this.activeKind = "";
+    this.currentFragmentIndex = -1;
     this.panel.style.display = "none";
     this.panel.innerHTML = "";
   }

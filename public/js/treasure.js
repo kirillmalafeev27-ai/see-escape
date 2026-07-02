@@ -44,18 +44,26 @@ export class TreasureSystem {
     this.sampleWaveHeight = sampleWaveHeight;
     this.onCollect = onCollect || (() => {});
     this.list = [];
+    this.nextId = 1;
   }
 
-  spawn(position) {
+  _createTreasure(position, options = {}) {
     const built = buildChest();
     built.root.position.copy(position);
     built.root.position.y = this.sampleWaveHeight(position.x, position.z) + 0.55;
     this.scene.add(built.root);
-    this.list.push({
+    const treasure = {
       ...built,
-      phase: Math.random() * Math.PI * 2,
+      id: String(options.id || `treasure-${this.nextId++}`),
+      phase: Number.isFinite(options.phase) ? options.phase : Math.random() * Math.PI * 2,
       rope: null,
-    });
+    };
+    this.list.push(treasure);
+    return treasure;
+  }
+
+  spawn(position) {
+    return this._createTreasure(position)?.id || "";
   }
 
   _ensureRope(treasure) {
@@ -75,7 +83,10 @@ export class TreasureSystem {
     if (treasure.rope) this.scene.remove(treasure.rope);
     this.scene.remove(treasure.root);
     this.list.splice(index, 1);
-    this.onCollect();
+    this.onCollect({
+      id: treasure.id,
+      position: treasure.root.position.clone(),
+    });
   }
 
   clear() {
@@ -84,6 +95,44 @@ export class TreasureSystem {
       this.scene.remove(treasure.root);
     }
     this.list = [];
+  }
+
+  snapshot() {
+    return this.list.map((treasure) => ({
+      id: treasure.id,
+      position: {
+        x: treasure.root.position.x,
+        y: treasure.root.position.y,
+        z: treasure.root.position.z,
+      },
+      phase: treasure.phase,
+    }));
+  }
+
+  syncFromSnapshot(items = []) {
+    if (!Array.isArray(items)) return;
+    const incomingIds = new Set(items.map((item) => String(item?.id || "")).filter(Boolean));
+    for (let i = this.list.length - 1; i >= 0; i--) {
+      if (incomingIds.has(this.list[i].id)) continue;
+      const treasure = this.list[i];
+      if (treasure.rope) this.scene.remove(treasure.rope);
+      this.scene.remove(treasure.root);
+      this.list.splice(i, 1);
+    }
+    for (const item of items) {
+      const id = String(item?.id || "");
+      const pos = item?.position || {};
+      if (!id || !Number.isFinite(pos.x) || !Number.isFinite(pos.y) || !Number.isFinite(pos.z)) continue;
+      let treasure = this.list.find((entry) => entry.id === id);
+      if (!treasure) {
+        treasure = this._createTreasure(new THREE.Vector3(pos.x, pos.y, pos.z), {
+          id,
+          phase: Number(item.phase) || 0,
+        });
+      }
+      treasure.root.position.set(pos.x, pos.y, pos.z);
+      if (Number.isFinite(item.phase)) treasure.phase = item.phase;
+    }
   }
 
   update(dt, playerPosition, { harpoon = false, pullTarget = playerPosition } = {}) {
