@@ -42,6 +42,8 @@
       .field select option { background: #071927; color: #eaf6ff; }
       .slot-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
       .coop-panel { grid-column: 1; grid-row: 3; display: grid; gap: 10px; min-width: 0; padding-top: 14px; border-top: 1px solid rgba(255,255,255,0.12); }
+      .spectator-panel { grid-row: 4; border-top-color: rgba(255,226,122,0.26); }
+      .spectator-panel .coop-title { color: #ffe27a; }
       .coop-title { color: #eaf6ff; font-size: 0.82rem; font-weight: 900; }
       .coop-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 8px; align-items: center; }
       .coop-row input { min-width: 0; height: 40px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.14); background: rgba(255,255,255,0.09); color: #eaf6ff; padding: 0 10px; font: inherit; font-size: 0.82rem; outline: none; text-transform: uppercase; }
@@ -53,6 +55,18 @@
       .coop-status.warn { color: #ffe27a; }
       .coop-badge { position: fixed; top: calc(318px + env(safe-area-inset-top)); right: calc(14px + env(safe-area-inset-right)); z-index: 26; display: none; max-width: min(330px, 86vw); padding: 8px 10px; border-radius: 8px; border: 1px solid rgba(127,216,255,0.32); background: rgba(4,18,28,0.76); color: #c9f8ed; font-size: 0.76rem; font-weight: 800; backdrop-filter: blur(8px); }
       .coop-badge.on { display: block; }
+      body.spectator-mode #fireButton,
+      body.spectator-mode #dumpButton,
+      body.spectator-mode #jumpButton,
+      body.spectator-mode .deckActionButton,
+      body.spectator-mode #islandTeleportButton,
+      body.spectator-mode #restartButton,
+      body.spectator-mode #actionQuiz,
+      body.spectator-mode #bonusChoice,
+      body.spectator-mode #questPanel {
+        pointer-events: none;
+      }
+      body.spectator-mode .mobile-controls { display: none !important; }
 
       #actionQuiz { position: fixed; left: 50%; top: 50%; transform: translate(-50%,-50%); z-index: 86; width: min(620px, calc(100vw - 28px)); display: grid; gap: 12px; padding: 16px; pointer-events: auto; background: rgba(4,18,28,0.9); box-shadow: 0 20px 70px rgba(0,0,0,0.48); }
       .action-quiz-head { display: flex; justify-content: space-between; gap: 12px; align-items: center; color: #ffe27a; }
@@ -173,7 +187,7 @@
         .learning-menu { grid-column: auto; grid-row: auto; }
         .learning-head, .learning-controls { grid-template-columns: 1fr; flex-direction: column; }
         .slot-grid { grid-template-columns: 1fr; max-height: 180px; overflow-y: auto; }
-        .coop-panel { grid-column: auto; grid-row: auto; }
+        .coop-panel, .spectator-panel { grid-column: auto; grid-row: auto; }
         .coop-row { grid-template-columns: 1fr 1fr; }
         .coop-row input { grid-column: 1 / -1; }
         .action-quiz-options { grid-template-columns: 1fr; }
@@ -325,9 +339,9 @@
     <div id="err"><div><h2 style="color:#ff8080">Не удалось запустить</h2><pre id="errmsg"></pre></div></div>
 
     <script src="./js/learning.js?v=20260619-coop-room-deck-v1"></script>
-    <script src="./js/coop.js?v=20260620-coop-touch-fixes-v1"></script>
+    <script src="./js/coop.js?v=20260706-spectator-v1"></script>
     <script type="module">
-    import { startGame } from "./js/game.js?v=20260702-coop-story-sync-v1";
+    import { startGame } from "./js/game.js?v=20260706-spectator-v1";
 
       const $ = (id) => document.getElementById(id);
       const loaderEl = $("loader");
@@ -377,29 +391,37 @@
         holdHint.innerHTML = "<b>Трюм открыт</b> - заходи по внутренним лестницам или сбоку люка · <b>E</b> - ведро и вода · <b>F</b> - доска и ремонт пробоин";
       }
 
-      function setStartBusy(busy) {
+      function setStartBusy(busy, spectator = false) {
         startBusy = busy;
         startButton.disabled = busy;
-        startButton.textContent = busy ? "Готовлю 15 заданий..." : "Начать игру";
+        startButton.textContent = busy
+          ? spectator
+            ? "Подключаю просмотр..."
+            : "Готовлю 15 заданий..."
+          : "Начать игру";
       }
 
-      startButton.addEventListener("click", async () => {
+      async function launchSeaBattle(options = {}) {
         if (startBusy) return;
-        setStartBusy(true);
+        const spectator = Boolean(options.spectator || window.SeaCoop?.isSpectator);
+        setStartBusy(true, spectator);
         loaderEl.style.display = "flex";
         loaderEl.classList.remove("hidden");
-        try {
-          await window.prepareSeaQuiz?.({ floors: 15, startFloor: 1 });
-        } catch (error) {
-          console.warn("Question prefetch failed, fallback questions will be used:", error);
-          if (error?.sharedDeckPending) {
-            loaderEl.style.display = "none";
-            setStartBusy(false);
-            return;
+        if (!spectator) {
+          try {
+            await window.prepareSeaQuiz?.({ floors: 15, startFloor: 1 });
+          } catch (error) {
+            console.warn("Question prefetch failed, fallback questions will be used:", error);
+            if (error?.sharedDeckPending) {
+              loaderEl.style.display = "none";
+              setStartBusy(false, spectator);
+              return;
+            }
           }
         }
         bootEl.hidden = true;
         document.body.classList.add("game-running");
+        document.body.classList.toggle("spectator-mode", spectator);
         try {
           await startGame($("app"), hud);
           loaderEl.classList.add("hidden");
@@ -411,10 +433,15 @@
           $("errmsg").textContent = (e && e.stack) || String(e);
           bootEl.hidden = false;
           document.body.classList.remove("game-running");
+          document.body.classList.remove("spectator-mode");
         } finally {
-          setStartBusy(false);
+          setStartBusy(false, spectator);
         }
-      });
+      }
+
+      window.startSeaBattle = launchSeaBattle;
+      document.addEventListener("sea-start-spectator", () => launchSeaBattle({ spectator: true }));
+      startButton.addEventListener("click", () => launchSeaBattle());
     </script>
   </body>
 </html>
