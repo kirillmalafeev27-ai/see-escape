@@ -91,6 +91,8 @@ export async function startGame(container, hud) {
   const world = createWorld(container);
   const { scene, camera, renderer, sampleWaveHeight, advanceTime } = world;
   const audioGuide = new AudioGuide({ button: hud.audioGuideButton });
+  const coop = window.SeaCoop || null;
+  const spectatorMode = Boolean(coop?.isSpectator);
   let player = null;
   const actionQuiz = new ActionQuizGate({
     audioGuide,
@@ -98,11 +100,13 @@ export async function startGame(container, hud) {
       if (active) player?.enterCursorMode?.();
     },
   });
-  audioGuide.introduce([
-    "Ты капитан боевого корабля. Главная цель: выжить, топить врагов, идти по компасу к крепости и забрать островное сокровище.",
-    "Ходи по палубе клавишами W A S D. Клик по экрану захватывает мышь для обзора и наведения.",
-    "Подойди к пушке. Жёлтая дуга показывает, куда упадёт ядро. Перед выстрелом реши задание, затем стреляй сам.",
-  ]);
+  if (!spectatorMode) {
+    audioGuide.introduce([
+      "Ты капитан боевого корабля. Главная цель: выжить, топить врагов, идти по компасу к крепости и забрать островное сокровище.",
+      "Ходи по палубе клавишами W A S D. Клик по экрану захватывает мышь для обзора и наведения.",
+      "Подойди к пушке. Жёлтая дуга показывает, куда упадёт ядро. Перед выстрелом реши задание, затем стреляй сам.",
+    ]);
+  }
 
   // Load + measure the player ship model so all gameplay fits the real model.
   let playerDims = { ...SHIP_DEFAULTS };
@@ -164,8 +168,6 @@ export async function startGame(container, hud) {
 
   const getEnv = () => ({ wind, sampleWaveHeight });
   const state = { score: 0, treasures: 0, over: false, bonuses: {} };
-  const coop = window.SeaCoop || null;
-  const spectatorMode = Boolean(coop?.isSpectator);
   const coopMeshes = new Map();
   let coopWorldSeq = 0;
   let coopLastAppliedWorldSeq = 0;
@@ -880,6 +882,8 @@ export async function startGame(container, hud) {
       }
       hud.prompt.textContent = "Ожидание ученика...";
       hud.crosshair.style.display = "none";
+      hud.msg.textContent = "Жду ученика в этой комнате. Ученик должен войти по этому же коду и нажать «Начать игру».";
+      hud.msg.style.opacity = "1";
       for (const button of [hud.fireButton, hud.dumpButton, hud.takePlankButton, hud.scoopWaterButton, hud.patchBreachButton]) {
         if (button) button.style.display = "none";
       }

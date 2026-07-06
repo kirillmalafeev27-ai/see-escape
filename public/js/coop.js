@@ -3,6 +3,7 @@
   const HTTP_STATE_INTERVAL_MS = 120;
   const WS_BUFFER_LIMIT = 256 * 1024;
   const HEARTBEAT_INTERVAL_MS = 5000;
+  const JOIN_TIMEOUT_MS = 12000;
 
   function $(id) {
     return document.getElementById(id);
@@ -54,11 +55,26 @@
     async join(roomCodeValue = "", options = {}) {
       const room = cleanRoom(roomCodeValue);
       const spectator = Boolean(options.spectator);
-      const response = await fetch("/api/coop/join", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ room, create: Boolean(options.create), spectator }),
-      });
+      const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+      const timer = controller
+        ? setTimeout(() => controller.abort(), Number(options.timeoutMs) || JOIN_TIMEOUT_MS)
+        : 0;
+      let response;
+      try {
+        response = await fetch("/api/coop/join", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ room, create: Boolean(options.create), spectator }),
+          signal: controller?.signal,
+        });
+      } catch (error) {
+        if (error?.name === "AbortError") {
+          throw new Error("Сервер не ответил за 12 секунд. Проверь код комнаты и обнови страницу.");
+        }
+        throw error;
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
       const data = await response.json().catch(() => ({}));
       if (!response.ok || !data.ok) throw new Error(data.error || `HTTP ${response.status}`);
       this.enabled = true;
@@ -451,7 +467,15 @@
       const desiredRoom = cleanRoom(room || SeaCoop.room);
       const shouldReuse = SeaCoop.enabled && SeaCoop.isSpectator && SeaCoop.room && (!desiredRoom || desiredRoom === SeaCoop.room);
       try {
-        SeaCoop.updateUi(options.create ? "Создаю зрительский код..." : "Подключаю зрителя...", "warn", "spectator");
+        SeaCoop.updateUi(
+          options.start
+            ? "Подключаю зрителя и открываю просмотр..."
+            : options.create
+              ? "Создаю зрительский код..."
+              : "Подключаю зрителя...",
+          "warn",
+          "spectator"
+        );
         if (!shouldReuse) {
           await SeaCoop.join(desiredRoom, {
             create: Boolean(options.create),
@@ -473,7 +497,7 @@
       connectSpectator(room, { create: !cleanRoom(room), start: true });
     });
     if (initialRoom) connect(initialRoom, { create: false });
-    if (initialWatchRoom) connectSpectator(initialWatchRoom, { create: false });
+    if (initialWatchRoom) connectSpectator(initialWatchRoom, { create: false, start: true });
   }
 
   window.SeaCoop = SeaCoop;
