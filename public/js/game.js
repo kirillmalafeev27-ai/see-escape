@@ -7,7 +7,7 @@ import { EffectsSystem } from "./effects.js?v=20260615-mac-perf-v1";
 import { ProjectileSystem } from "./ballistics.js?v=20260619-authoritative-coop-v2";
 import { buildPlayerShip, SHIP_DEFAULTS } from "./ship.js?v=20260619-authoritative-coop-v2";
 import { EnemyFleet } from "./enemy.js?v=20260619-authoritative-coop-v2";
-import { PlayerController } from "./player.js?v=20260620-coop-touch-fixes-v1";
+import { PlayerController } from "./player.js?v=20260706-spectator-v1";
 import { DamageControlSystem } from "./damage-control.js?v=20260620-coop-touch-fixes-v1";
 import { loadAndAnalyzeShip } from "./models.js?v=20260607-assets-fire-v1";
 import { applyCollisionProfile, loadAppliedCollisionProfile } from "./collision-profile.js?v=20260609-remove-hold-helpers-v1";
@@ -165,14 +165,17 @@ export async function startGame(container, hud) {
   const getEnv = () => ({ wind, sampleWaveHeight });
   const state = { score: 0, treasures: 0, over: false, bonuses: {} };
   const coop = window.SeaCoop || null;
+  const spectatorMode = Boolean(coop?.isSpectator);
   const coopMeshes = new Map();
   let coopWorldSeq = 0;
   let coopLastAppliedWorldSeq = 0;
   let coopGuestWorldReady = false;
   let coopGuestDeckSnapped = false;
   let coopGuestWaitingMessageShown = false;
+  let spectatorWaitingMessageShown = false;
   let coopGuestSeaTimeBase = 0;
   let coopGuestSeaTimeLocalMs = 0;
+  let lastHudSnapshot = null;
   const audioState = {
     prompt: "",
     flags: new Map(),
@@ -326,11 +329,17 @@ export async function startGame(container, hud) {
     requestActionQuiz: (action, context) => actionQuiz.request(action, context),
     onMessage: (m) => m && setMessage(m),
     onCoopAction: (action, payload = {}) => {
-      if (!coop?.enabled || coop.isHost) return;
+      if (!coop?.enabled || coop.isHost || coop.isSpectator) return;
       coop.publishEvent?.("coop-action", { action, ...payload });
     },
+    inputEnabled: !spectatorMode,
   });
-  if (coop?.enabled) player.setSpawnOffset?.(coopSeatLocalOffset(coop.seat));
+  if (spectatorMode) {
+    document.body?.classList.add("spectator-mode");
+    setMessage("Жду ученика в этой комнате. Как только он начнет игру, камера переключится на его экран.");
+  } else if (coop?.enabled) {
+    player.setSpawnOffset?.(coopSeatLocalOffset(coop.seat));
+  }
   islandQuest.setPlayer(player);
   bonusSystem = new BonusSystem({
     hud,
@@ -687,7 +696,7 @@ export async function startGame(container, hud) {
     setStoryIslandVisible(false);
     bonusSystem?.reset?.();
     player?.resetForRun?.();
-    if (coop?.enabled) player?.setSpawnOffset?.(coopSeatLocalOffset(coop.seat));
+    if (coop?.enabled && !spectatorMode) player?.setSpawnOffset?.(coopSeatLocalOffset(coop.seat));
 
     hud.gameover.style.display = "none";
     if (hud.restartButton) hud.restartButton.style.display = "none";
@@ -756,6 +765,154 @@ export async function startGame(container, hud) {
 
   function isVecPayload(v) {
     return Number.isFinite(v?.x) && Number.isFinite(v?.y) && Number.isFinite(v?.z);
+  }
+
+  function spectatorTargetPeer() {
+    if (!spectatorMode) return null;
+    return coop?.spectatorTargetPeer?.() || coop?.hostPeer?.() || coop?.peers?.()[0] || null;
+  }
+
+  function applySpectatorView() {
+    if (!spectatorMode || !player) return false;
+    const target = spectatorTargetPeer();
+    const remote = target?.state || null;
+    if (!remote) return false;
+    let worldPosition = null;
+    if (isVecPayload(remote.localPosition)) {
+      worldPosition = ship.group.localToWorld(vecFromPayload(remote.localPosition));
+    } else if (isVecPayload(remote.position)) {
+      worldPosition = vecFromPayload(remote.position);
+    }
+    if (!worldPosition) return false;
+    player.setWorldPose(
+      worldPosition,
+      Number.isFinite(remote.yaw) ? remote.yaw : ship.group.rotation.y,
+      Number.isFinite(remote.pitch) ? remote.pitch : -0.08,
+      Number.isFinite(remote.eyeHeight) ? remote.eyeHeight : undefined
+    );
+    spectatorWaitingMessageShown = false;
+    return true;
+  }
+
+  const spectatorPanelIds = ["actionQuiz", "bonusChoice", "questPanel", "gameover"];
+
+  function buttonHudSnapshot(element) {
+    if (!element) return null;
+    return {
+      display: element.style.display || "",
+      disabled: Boolean(element.disabled),
+      text: element.textContent || "",
+    };
+  }
+
+  function panelHudSnapshot(id) {
+    const element = document.getElementById(id);
+    if (!element) return null;
+    return {
+      id,
+      hidden: Boolean(element.hidden),
+      display: element.style.display || "",
+      className: element.className || "",
+      html: element.innerHTML || "",
+    };
+  }
+
+  function captureHudSnapshot() {
+    return {
+      prompt: hud.prompt?.textContent || "",
+      crosshairDisplay: hud.crosshair?.style.display || "",
+      reloadWrapDisplay: hud.reloadWrap?.style.display || "",
+      reloadBarWidth: hud.reloadBar?.style.width || "",
+      fireButton: buttonHudSnapshot(hud.fireButton),
+      dumpButton: buttonHudSnapshot(hud.dumpButton),
+      takePlankButton: buttonHudSnapshot(hud.takePlankButton),
+      scoopWaterButton: buttonHudSnapshot(hud.scoopWaterButton),
+      patchBreachButton: buttonHudSnapshot(hud.patchBreachButton),
+      jumpButton: buttonHudSnapshot(hud.jumpButton),
+      islandTeleportButton: buttonHudSnapshot(hud.islandTeleportButton),
+      restartButton: buttonHudSnapshot(hud.restartButton),
+      score: hud.score?.textContent || "",
+      enemies: hud.enemies?.textContent || "",
+      treasures: hud.treasures?.textContent || "",
+      integrityWidth: hud.integrityBar?.style.width || "",
+      integrityBackground: hud.integrityBar?.style.background || "",
+      floodLabel: hud.floodLabel?.textContent || "",
+      windArrowTransform: hud.windArrow?.style.transform || "",
+      windText: hud.windText?.textContent || "",
+      speedText: hud.speedText?.textContent || "",
+      compassArrowTransform: hud.compassArrow?.style.transform || "",
+      compassArrowOpacity: hud.compassArrow?.style.opacity || "",
+      compassText: hud.compassText?.textContent || "",
+      messageText: hud.msg?.textContent || "",
+      messageOpacity: hud.msg?.style.opacity || "",
+      flashOpacity: hud.flash?.style.opacity || "",
+      panels: spectatorPanelIds.map(panelHudSnapshot).filter(Boolean),
+      t: Date.now(),
+    };
+  }
+
+  function applyButtonHudSnapshot(element, snapshot) {
+    if (!element || !snapshot) return;
+    element.style.display = snapshot.display || "";
+    element.disabled = Boolean(snapshot.disabled);
+    element.textContent = snapshot.text || "";
+  }
+
+  function applyPanelHudSnapshot(snapshot) {
+    if (!snapshot?.id) return;
+    const element = document.getElementById(snapshot.id);
+    if (!element) return;
+    element.hidden = Boolean(snapshot.hidden);
+    element.style.display = snapshot.display || "";
+    if (snapshot.className) element.className = snapshot.className;
+    if (element.innerHTML !== snapshot.html) element.innerHTML = snapshot.html || "";
+    element.querySelectorAll("button,input,select,textarea").forEach((control) => {
+      control.tabIndex = -1;
+    });
+  }
+
+  function applySpectatorHud(snapshot) {
+    if (!spectatorMode) return;
+    if (!snapshot) {
+      if (!spectatorWaitingMessageShown) {
+        setMessage("Жду ученика в комнате. Он должен войти по коду и нажать старт.");
+        spectatorWaitingMessageShown = true;
+      }
+      hud.prompt.textContent = "Ожидание ученика...";
+      hud.crosshair.style.display = "none";
+      for (const button of [hud.fireButton, hud.dumpButton, hud.takePlankButton, hud.scoopWaterButton, hud.patchBreachButton]) {
+        if (button) button.style.display = "none";
+      }
+      return;
+    }
+    hud.prompt.textContent = snapshot.prompt || "";
+    hud.crosshair.style.display = snapshot.crosshairDisplay || "none";
+    hud.reloadWrap.style.display = snapshot.reloadWrapDisplay || "none";
+    hud.reloadBar.style.width = snapshot.reloadBarWidth || "0%";
+    applyButtonHudSnapshot(hud.fireButton, snapshot.fireButton);
+    applyButtonHudSnapshot(hud.dumpButton, snapshot.dumpButton);
+    applyButtonHudSnapshot(hud.takePlankButton, snapshot.takePlankButton);
+    applyButtonHudSnapshot(hud.scoopWaterButton, snapshot.scoopWaterButton);
+    applyButtonHudSnapshot(hud.patchBreachButton, snapshot.patchBreachButton);
+    applyButtonHudSnapshot(hud.jumpButton, snapshot.jumpButton);
+    applyButtonHudSnapshot(hud.islandTeleportButton, snapshot.islandTeleportButton);
+    applyButtonHudSnapshot(hud.restartButton, snapshot.restartButton);
+    hud.score.textContent = snapshot.score || hud.score.textContent;
+    hud.enemies.textContent = snapshot.enemies || hud.enemies.textContent;
+    hud.treasures.textContent = snapshot.treasures || hud.treasures.textContent;
+    hud.integrityBar.style.width = snapshot.integrityWidth || hud.integrityBar.style.width;
+    hud.integrityBar.style.background = snapshot.integrityBackground || hud.integrityBar.style.background;
+    hud.floodLabel.textContent = snapshot.floodLabel || hud.floodLabel.textContent;
+    hud.windArrow.style.transform = snapshot.windArrowTransform || hud.windArrow.style.transform;
+    hud.windText.textContent = snapshot.windText || hud.windText.textContent;
+    hud.speedText.textContent = snapshot.speedText || hud.speedText.textContent;
+    hud.compassArrow.style.transform = snapshot.compassArrowTransform || hud.compassArrow.style.transform;
+    hud.compassArrow.style.opacity = snapshot.compassArrowOpacity || hud.compassArrow.style.opacity;
+    hud.compassText.textContent = snapshot.compassText || hud.compassText.textContent;
+    hud.msg.textContent = snapshot.messageText || "";
+    hud.msg.style.opacity = snapshot.messageOpacity || "0";
+    hud.flash.style.opacity = snapshot.flashOpacity || "0";
+    for (const panel of snapshot.panels || []) applyPanelHudSnapshot(panel);
   }
 
   function coopGuestAuthoritative() {
@@ -938,6 +1095,7 @@ export async function startGame(container, hud) {
   }
 
   function requestRestart() {
+    if (spectatorMode) return;
     if (!state.over) return;
     if (coop?.enabled && !coop.isHost) {
       coop.publishEvent?.("restart-request", {});
@@ -1058,32 +1216,42 @@ export async function startGame(container, hud) {
     }
     applyHostWorldFromPeers();
 
-    const pose = player.captureWorldPose();
-    const localInsideHold = Boolean(damageControl.isInsideHold?.(player.rig.position));
-    const payload = {
-      position: vecPayload(pose.position),
-      localPosition: vecPayload(pose.localPosition),
-      yaw: pose.yaw,
-      pitch: pose.pitch,
-      eyeHeight: pose.eyeHeight,
-      ship: {
-        position: vecPayload(ship.group.position),
-        yaw: ship.group.rotation.y,
-        velocity: vecPayload(sailing.velocity),
-      },
-      insideHold: localInsideHold,
-      score: state.score,
-      treasures: state.treasures,
-      flood: damageControl.getState?.().waterLevel ?? 0,
-      over: state.over,
-      islandQuest: Boolean(islandQuest.active),
-      t: Date.now(),
-    };
-    if (coop.isHost) payload.world = serializeCoopWorld();
-    coop.publishState(payload);
+    if (!coop.isSpectator) {
+      const pose = player.captureWorldPose();
+      const localInsideHold = Boolean(damageControl.isInsideHold?.(player.rig.position));
+      const payload = {
+        position: vecPayload(pose.position),
+        localPosition: vecPayload(pose.localPosition),
+        yaw: pose.yaw,
+        pitch: pose.pitch,
+        eyeHeight: pose.eyeHeight,
+        ship: {
+          position: vecPayload(ship.group.position),
+          yaw: ship.group.rotation.y,
+          velocity: vecPayload(sailing.velocity),
+        },
+        insideHold: localInsideHold,
+        score: state.score,
+        treasures: state.treasures,
+        flood: damageControl.getState?.().waterLevel ?? 0,
+        over: state.over,
+        islandQuest: Boolean(islandQuest.active),
+        hud: lastHudSnapshot,
+        t: Date.now(),
+      };
+      if (coop.isHost) payload.world = serializeCoopWorld();
+      coop.publishState(payload);
+    }
 
     const alive = new Set();
+    const spectatorTarget = spectatorTargetPeer();
     for (const playerInfo of coop.peers()) {
+      if (spectatorMode && playerInfo.id === spectatorTarget?.id) {
+        alive.add(playerInfo.id);
+        const mesh = coopMeshes.get(playerInfo.id);
+        if (mesh) mesh.visible = false;
+        continue;
+      }
       const remote = playerInfo.state || {};
       let worldPosition = null;
       if (isVecPayload(remote.localPosition)) {
@@ -1141,6 +1309,7 @@ export async function startGame(container, hud) {
       advanceGuestSeaTime();
       advanceGuestWorld(dt);
     }
+    if (spectatorMode) applySpectatorView();
     const playerInsideHold = damageControl.isInsideHold?.(player.rig.position) || false;
     damageControl.updateInteriorVisibility(player.rig.position);
     if (coopGuestWorld && !coopGuestWorldReady) {
@@ -1230,7 +1399,9 @@ export async function startGame(container, hud) {
         ship.group.updateMatrixWorld(true);
       }
 
+      if (spectatorMode) applySpectatorView();
       player.update(dt);
+      if (spectatorMode) applySpectatorView();
       if (coopGuestWorld) updateCoop(dt);
       if (!coopGuestWorld) {
         fleet.quizMode = Boolean(islandQuest.active);
@@ -1335,6 +1506,12 @@ export async function startGame(container, hud) {
     }
     if (hud.flash.style.opacity && parseFloat(hud.flash.style.opacity) > 0) {
       hud.flash.style.opacity = String(Math.max(0, parseFloat(hud.flash.style.opacity) - dt * 1.2));
+    }
+    if (spectatorMode) {
+      applySpectatorHud(spectatorTargetPeer()?.state?.hud || null);
+      lastHudSnapshot = null;
+    } else {
+      lastHudSnapshot = captureHudSnapshot();
     }
   }
 

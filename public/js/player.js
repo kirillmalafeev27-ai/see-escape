@@ -78,7 +78,7 @@ function angleDelta(a, b) {
 }
 
 export class PlayerController {
-  constructor({ scene, camera, ship, domElement, projectiles, effects, getEnv, fireButton, dumpButton, jumpButton, takePlankButton, scoopWaterButton, patchBreachButton, islandTeleportButton, damageControl, sailing, islandQuest, requestActionQuiz, onMessage, onCoopAction }) {
+  constructor({ scene, camera, ship, domElement, projectiles, effects, getEnv, fireButton, dumpButton, jumpButton, takePlankButton, scoopWaterButton, patchBreachButton, islandTeleportButton, damageControl, sailing, islandQuest, requestActionQuiz, onMessage, onCoopAction, inputEnabled = true }) {
     this.camera = camera;
     this.ship = ship;
     this.dom = domElement;
@@ -98,6 +98,7 @@ export class PlayerController {
     this.requestActionQuiz = requestActionQuiz || null;
     this.onMessage = onMessage || (() => {});
     this.onCoopAction = onCoopAction || (() => {});
+    this.inputEnabled = inputEnabled !== false;
     this.dims = ship.dims;
     this.walkableMeshes = ship.walkableMeshes || [];
     this.stairZones = ship.stairZones || [];
@@ -176,7 +177,7 @@ export class PlayerController {
     this.handCannon = this._buildHandCannon();
     camera.add(this.handCannon);
 
-    this._bindInput();
+    if (this.inputEnabled) this._bindInput();
     this._placeOnDeck();
     this._rememberSafePosition();
   }

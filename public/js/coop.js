@@ -2,6 +2,7 @@
   const SYNC_INTERVAL_MS = 33;
   const HTTP_STATE_INTERVAL_MS = 120;
   const WS_BUFFER_LIMIT = 256 * 1024;
+  const HEARTBEAT_INTERVAL_MS = 5000;
 
   function $(id) {
     return document.getElementById(id);
@@ -22,23 +23,28 @@
     playerId: "",
     seat: 1,
     color: "#3aa0ff",
+    role: "player",
+    isSpectator: false,
     transport: "",
     players: new Map(),
+    spectators: new Map(),
     configs: new Map(),
     eventHandlers: new Set(),
     seenEventIds: new Set(),
     socket: null,
     socketOpened: false,
     reconnectTimer: 0,
+    heartbeatTimer: 0,
     eventSource: null,
     statusEl: null,
+    spectatorStatusEl: null,
     badgeEl: null,
     lastSendAt: 0,
     lastHttpStateAt: 0,
     sending: false,
 
     get isHost() {
-      return this.seat === 1;
+      return !this.isSpectator && this.seat === 1;
     },
 
     get realtimeReady() {
@@ -47,20 +53,37 @@
 
     async join(roomCodeValue = "", options = {}) {
       const room = cleanRoom(roomCodeValue);
+      const spectator = Boolean(options.spectator);
       const response = await fetch("/api/coop/join", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ room, create: Boolean(options.create) }),
+        body: JSON.stringify({ room, create: Boolean(options.create), spectator }),
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok || !data.ok) throw new Error(data.error || `HTTP ${response.status}`);
       this.enabled = true;
       this.room = data.room;
       this.playerId = data.playerId;
-      this.seat = data.seat;
+      this.role = data.role || (data.spectator ? "spectator" : "player");
+      this.isSpectator = this.role === "spectator";
+      this.seat = Number(data.seat) || (this.isSpectator ? 0 : 1);
       this.color = data.color || this.color;
       this.applyRoomState(data.state);
       this.openRealtime();
+      if (this.isSpectator) {
+        const hint = options.create
+          ? "Диктуй этот код ученику. Когда он войдет и нажмет старт, нажми «Смотреть» или оставайся в ожидании."
+          : "Подключено. Нажми «Смотреть», чтобы видеть игру глазами ученика.";
+        this.updateUi(`Комната ${this.room}. Режим зрителя. ${hint}`, "on", "spectator");
+        this.updateBadge();
+        try {
+          const url = new URL(location.href);
+          url.searchParams.set("watch", this.room);
+          url.searchParams.delete("room");
+          history.replaceState(null, "", url);
+        } catch (_) {}
+        return data;
+      }
       this.updateUi(`Комната ${this.room}. Ты игрок ${this.seat}. Канал синхронизации запускается...`, "on");
       const deckReady = Boolean(this.configForKey("quiz-deck")?.questions?.length);
       const startHint = this.isHost
@@ -74,6 +97,7 @@
       try {
         const url = new URL(location.href);
         url.searchParams.set("room", this.room);
+        url.searchParams.delete("watch");
         history.replaceState(null, "", url);
       } catch (_) {}
       return data;
@@ -114,6 +138,7 @@
           this.eventSource = null;
         }
         this.updateUi(`Комната ${this.room}. Быстрая синхронизация включена.`, "on");
+        this.startHeartbeat();
         this.publishQuizSettings();
       });
       socket.addEventListener("message", (event) => this.handleRealtimeMessage(event.data));
@@ -148,6 +173,14 @@
       this.eventSource.onerror = () => {
         if (this.enabled) this.updateUi(`Комната ${this.room}: резервный канал переподключается...`, "warn");
       };
+    },
+
+    startHeartbeat() {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = setInterval(() => {
+        if (!this.enabled) return;
+        this.sendRealtime({ type: "ping" });
+      }, HEARTBEAT_INTERVAL_MS);
     },
 
     handleRealtimeMessage(raw) {
@@ -185,6 +218,12 @@
         nextPlayers.set(playerInfo.id, playerInfo);
       }
       this.players = nextPlayers;
+      const nextSpectators = new Map();
+      for (const spectatorInfo of roomState.spectators || []) {
+        if (!spectatorInfo || spectatorInfo.id === this.playerId) continue;
+        nextSpectators.set(spectatorInfo.id, spectatorInfo);
+      }
+      this.spectators = nextSpectators;
       this.updateBadge();
     },
 
@@ -214,7 +253,7 @@
     },
 
     publishConfig(key, config, options = {}) {
-      if (!this.enabled || !this.room || !this.playerId || !config) return;
+      if (!this.enabled || this.isSpectator || !this.room || !this.playerId || !config) return;
       const cleanKey = String(key || "").trim();
       if (!cleanKey) return;
       this.configs.set(cleanKey, config);
@@ -238,13 +277,13 @@
     },
 
     publishQuizSettings() {
-      if (!this.isHost) return;
+      if (this.isSpectator || !this.isHost) return;
       const settings = window.getSeaQuizSettings?.();
       if (settings) this.publishConfig("quiz-settings", settings, { replace: true });
     },
 
     publishState(state) {
-      if (!this.enabled || !this.room || !this.playerId) return;
+      if (!this.enabled || this.isSpectator || !this.room || !this.playerId) return;
       const now = performance.now();
       if (now - this.lastSendAt < SYNC_INTERVAL_MS) return;
       this.lastSendAt = now;
@@ -265,7 +304,7 @@
     },
 
     publishEvent(name, payload = {}) {
-      if (!this.enabled || !name) return false;
+      if (!this.enabled || this.isSpectator || !name) return false;
       const id =
         (typeof crypto !== "undefined" && crypto.randomUUID)
           ? crypto.randomUUID()
@@ -286,11 +325,16 @@
     },
 
     peers() {
-      return [...this.players.values()].filter((player) => player?.state);
+      return [...this.players.values()].filter((player) => player?.state && player.role !== "spectator");
     },
 
     hostPeer() {
-      return [...this.players.values()].find((player) => player?.seat === 1 && player?.state) || null;
+      return this.peers().find((player) => player?.seat === 1) || null;
+    },
+
+    spectatorTargetPeer() {
+      const peers = this.peers();
+      return peers.find((player) => player?.seat === 1) || peers[0] || null;
     },
 
     hasPeers() {
@@ -303,16 +347,32 @@
       return { peers: peers.length, inHold };
     },
 
-    updateUi(text, variant = "") {
-      if (!this.statusEl) return;
-      this.statusEl.textContent = text;
-      this.statusEl.className = `coop-status ${variant}`.trim();
+    updateUi(text, variant = "", target = "") {
+      const element =
+        target === "spectator"
+          ? this.spectatorStatusEl
+          : target === "coop"
+            ? this.statusEl
+            : this.isSpectator
+              ? this.spectatorStatusEl || this.statusEl
+              : this.statusEl;
+      if (!element) return;
+      element.textContent = text;
+      element.className = `coop-status ${variant}`.trim();
     },
 
     updateBadge() {
       if (!this.badgeEl) return;
       if (!this.enabled) {
         this.badgeEl.classList.remove("on");
+        return;
+      }
+      if (this.isSpectator) {
+        const target = this.spectatorTargetPeer();
+        const targetText = target ? `смотрю P${target.seat || "?"}` : "жду ученика";
+        const mode = this.transport === "ws" ? "sync" : "fallback";
+        this.badgeEl.textContent = `Зритель ${this.room}: ${targetText} · ${mode}`;
+        this.badgeEl.classList.add("on");
         return;
       }
       const { peers, inHold } = this.peerSummary();
@@ -328,7 +388,9 @@
     const startButton = $("start");
     if (!panel || !startButton || $("coop-panel")) return;
 
-    const initialRoom = cleanRoom(new URLSearchParams(location.search).get("room"));
+    const params = new URLSearchParams(location.search);
+    const initialRoom = cleanRoom(params.get("room"));
+    const initialWatchRoom = cleanRoom(params.get("watch") || params.get("spectate"));
     const el = document.createElement("div");
     el.id = "coop-panel";
     el.className = "coop-panel";
@@ -343,27 +405,75 @@
     `;
     panel.insertBefore(el, startButton);
 
+    const spectatorEl = document.createElement("div");
+    spectatorEl.id = "spectator-panel";
+    spectatorEl.className = "coop-panel spectator-panel";
+    spectatorEl.innerHTML = `
+      <div class="coop-title">Режим зрителя</div>
+      <div class="coop-row">
+        <input id="spectator-room" maxlength="8" autocomplete="off" placeholder="Код для просмотра" value="${initialWatchRoom}">
+        <button type="button" id="spectator-create">Создать код</button>
+        <button type="button" id="spectator-watch">Смотреть</button>
+      </div>
+      <div id="spectator-status" class="coop-status">Отдельный режим для учителя: ученик играет, ты видишь его экран и HUD без управления.</div>
+    `;
+    panel.insertBefore(spectatorEl, startButton);
+
     const badge = document.createElement("div");
     badge.id = "coop-badge";
     badge.className = "coop-badge";
     document.body.appendChild(badge);
 
     SeaCoop.statusEl = $("coop-status");
+    SeaCoop.spectatorStatusEl = $("spectator-status");
     SeaCoop.badgeEl = badge;
 
     const input = $("coop-room");
+    const spectatorInput = $("spectator-room");
     const connect = async (room, options = {}) => {
       try {
-        SeaCoop.updateUi("Подключаю комнату...", "warn");
+        SeaCoop.updateUi("Подключаю комнату...", "warn", "coop");
         await SeaCoop.join(room, options);
       } catch (error) {
-        SeaCoop.updateUi(`Не удалось подключиться: ${error.message || error}`, "warn");
+        SeaCoop.updateUi(`Не удалось подключиться: ${error.message || error}`, "warn", "coop");
+      }
+    };
+
+    const startSpectatorGame = async () => {
+      if (typeof window.startSeaBattle === "function") {
+        await window.startSeaBattle({ spectator: true });
+      } else {
+        document.dispatchEvent(new CustomEvent("sea-start-spectator"));
+      }
+    };
+
+    const connectSpectator = async (room, options = {}) => {
+      const desiredRoom = cleanRoom(room || SeaCoop.room);
+      const shouldReuse = SeaCoop.enabled && SeaCoop.isSpectator && SeaCoop.room && (!desiredRoom || desiredRoom === SeaCoop.room);
+      try {
+        SeaCoop.updateUi(options.create ? "Создаю зрительский код..." : "Подключаю зрителя...", "warn", "spectator");
+        if (!shouldReuse) {
+          await SeaCoop.join(desiredRoom, {
+            create: Boolean(options.create),
+            spectator: true,
+          });
+        }
+        if (spectatorInput) spectatorInput.value = SeaCoop.room;
+        if (options.start) await startSpectatorGame();
+      } catch (error) {
+        SeaCoop.updateUi(`Не удалось подключить зрителя: ${error.message || error}`, "warn", "spectator");
       }
     };
 
     $("coop-create")?.addEventListener("click", () => connect("", { create: true }));
     $("coop-join")?.addEventListener("click", () => connect(input?.value || "", { create: false }));
+    $("spectator-create")?.addEventListener("click", () => connectSpectator(spectatorInput?.value || "", { create: true }));
+    $("spectator-watch")?.addEventListener("click", () => {
+      const room = spectatorInput?.value || SeaCoop.room || "";
+      connectSpectator(room, { create: !cleanRoom(room), start: true });
+    });
     if (initialRoom) connect(initialRoom, { create: false });
+    if (initialWatchRoom) connectSpectator(initialWatchRoom, { create: false });
   }
 
   window.SeaCoop = SeaCoop;
