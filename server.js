@@ -56,6 +56,7 @@ function getCoopRoom(code, options = {}) {
     coopRooms.set(id, {
       id,
       players: new Map(),
+      spectators: new Map(),
       configs: new Map(),
       clients: new Set(),
       wsClients: new Set(),
@@ -71,6 +72,9 @@ function pruneStalePlayers(room, ttl = STALE_PLAYER_TTL) {
   for (const [playerId, player] of room.players) {
     if (now - player.lastSeen > ttl) room.players.delete(playerId);
   }
+  for (const [spectatorId, spectator] of room.spectators || []) {
+    if (now - spectator.lastSeen > ttl) room.spectators.delete(spectatorId);
+  }
 }
 
 function activePlayers(room) {
@@ -82,8 +86,14 @@ function publicCoopRoomState(room) {
   return {
     room: room.id,
     players: activePlayers(room),
+    spectators: [...(room.spectators || new Map()).values()].filter((spectator) => Date.now() - spectator.lastSeen < ACTIVE_PLAYER_TTL),
     configs: Object.fromEntries(room.configs.entries()),
   };
+}
+
+function getRoomMember(room, id) {
+  if (!room || !id) return null;
+  return room.players.get(id) || room.spectators?.get(id) || null;
 }
 
 function broadcastCoop(room, event, data) {
@@ -188,6 +198,11 @@ function handleCoopWsMessage(room, player, socket, raw) {
   }
   player.lastSeen = Date.now();
   room.lastSeen = player.lastSeen;
+  if (message.type === "ping") {
+    sendCoopWs(socket, { type: "pong", serverTime: Date.now() });
+    return;
+  }
+  if (player.role === "spectator") return;
   if (message.type === "state") {
     player.state = message.state || null;
     broadcastCoop(room, "state", publicCoopRoomState(room));
@@ -213,9 +228,6 @@ function handleCoopWsMessage(room, player, socket, raw) {
     });
     return;
   }
-  if (message.type === "ping") {
-    sendCoopWs(socket, { type: "pong", serverTime: Date.now() });
-  }
 }
 
 function handleCoopWebSocketUpgrade(req, socket) {
@@ -227,7 +239,7 @@ function handleCoopWebSocketUpgrade(req, socket) {
     return true;
   }
   const room = getCoopRoom(url.searchParams.get("room"), { create: false });
-  const player = room?.players.get(url.searchParams.get("player"));
+  const player = getRoomMember(room, url.searchParams.get("player"));
   if (!player) {
     socket.end("HTTP/1.1 404 Not Found\r\n\r\n");
     return true;
@@ -276,7 +288,7 @@ function cleanupCoopRooms() {
   const now = Date.now();
   for (const [id, room] of coopRooms) {
     pruneStalePlayers(room, STALE_PLAYER_TTL);
-    if (!room.players.size && !room.clients.size && !room.wsClients.size && now - room.lastSeen > 300000) {
+    if (!room.players.size && !room.spectators?.size && !room.clients.size && !room.wsClients.size && now - room.lastSeen > 300000) {
       coopRooms.delete(id);
     }
   }
@@ -340,6 +352,30 @@ function installCoopRoutes(app) {
     const room = getCoopRoom(requestedRoom, { create });
     if (!room) return res.status(404).json({ ok: false, error: "Комната не найдена. Проверь код или попроси первого игрока создать комнату заново." });
     pruneStalePlayers(room, STALE_PLAYER_TTL);
+    if (req.body?.spectator) {
+      room.lastSeen = Date.now();
+      const spectatorId = Math.random().toString(36).slice(2, 10);
+      const spectator = {
+        id: spectatorId,
+        role: "spectator",
+        name: String(req.body?.name || "Spectator").slice(0, 24),
+        state: null,
+        lastSeen: Date.now(),
+      };
+      room.spectators.set(spectatorId, spectator);
+      broadcastCoop(room, "room", publicCoopRoomState(room));
+      return res.json({
+        ok: true,
+        room: room.id,
+        playerId: spectatorId,
+        spectatorId,
+        role: "spectator",
+        spectator: true,
+        seat: 0,
+        color: "#c9f8ed",
+        state: publicCoopRoomState(room),
+      });
+    }
     /* Room size is intentionally unlimited; legacy full-room response disabled.
       return res.status(409).json({ ok: false, error: "Комната уже заполнена: максимум 2 игрока." });
     */
