@@ -178,6 +178,7 @@ export async function startGame(container, hud) {
   let coopGuestSeaTimeBase = 0;
   let coopGuestSeaTimeLocalMs = 0;
   let lastHudSnapshot = null;
+  let msgTimer = 0;
   const audioState = {
     prompt: "",
     flags: new Map(),
@@ -708,7 +709,6 @@ export async function startGame(container, hud) {
   }
 
   // ---- HUD helpers ----
-  let msgTimer = 0;
   function setMessage(text, options = {}) {
     hud.msg.textContent = text;
     hud.msg.style.opacity = "1";
