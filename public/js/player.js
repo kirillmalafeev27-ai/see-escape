@@ -78,7 +78,7 @@ function angleDelta(a, b) {
 }
 
 export class PlayerController {
-  constructor({ scene, camera, ship, domElement, projectiles, effects, getEnv, fireButton, dumpButton, jumpButton, takePlankButton, scoopWaterButton, patchBreachButton, islandTeleportButton, damageControl, sailing, islandQuest, requestActionQuiz, onMessage, onCoopAction, inputEnabled = true }) {
+  constructor({ scene, camera, ship, domElement, projectiles, effects, getEnv, fireButton, dumpButton, jumpButton, takePlankButton, scoopWaterButton, patchBreachButton, helmButton, islandTeleportButton, damageControl, sailing, islandQuest, requestActionQuiz, onMessage, onCoopAction, inputEnabled = true }) {
     this.camera = camera;
     this.ship = ship;
     this.dom = domElement;
@@ -88,6 +88,7 @@ export class PlayerController {
     this.fireButton = fireButton;
     this.dumpButton = dumpButton;
     this.jumpButton = jumpButton;
+    this.helmButton = helmButton;
     this.takePlankButton = takePlankButton;
     this.scoopWaterButton = scoopWaterButton;
     this.patchBreachButton = patchBreachButton;
@@ -448,6 +449,7 @@ export class PlayerController {
       this.patchBreachButton,
       this.islandTeleportButton,
       this.jumpButton,
+      this.helmButton,
     ]) {
       button?.addEventListener("contextmenu", preventHoldMenu);
       button?.addEventListener("selectstart", preventHoldMenu);
@@ -498,6 +500,16 @@ export class PlayerController {
       e.preventDefault();
       e.stopPropagation();
       this._jump();
+    });
+    this.helmButton?.addEventListener("pointerdown", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this.enterCursorMode();
+    });
+    this.helmButton?.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this._toggleHelm();
     });
     this.dom.addEventListener("contextmenu", (e) => e.preventDefault());
     document.addEventListener("pointerlockchange", () => {
@@ -886,6 +898,16 @@ export class PlayerController {
       this.airborne = false;
       this._rememberSafePosition();
     }
+  }
+
+  // Same entry point as pressing E at the wheel — the on-screen button just
+  // calls it directly so touch devices are not locked out of sailing.
+  _toggleHelm() {
+    if (!this.sailing?.interact(this.rig)) return;
+    this.verticalVelocity = 0;
+    this.airborne = false;
+    this._rememberSafePosition();
+    this._resetVirtualMove();
   }
 
   _dumpBucket() {
@@ -1353,6 +1375,9 @@ export class PlayerController {
         handCannonCharges: this.handCannonCharges,
         cannonMode: this.cannonMode,
         canJump: false,
+        canTakeHelm: false,
+        atHelm: false,
+        helmLabel: "",
       };
     }
     const reload = this.activeCannon?.reload || 0;
@@ -1395,6 +1420,9 @@ export class PlayerController {
       handCannonCharges: this.handCannonCharges,
       cannonMode: this.cannonMode,
       canJump: !this.airborne,
+      canTakeHelm: Boolean(this.sailing?.canTakeHelm(this.rig)),
+      atHelm: Boolean(this.sailing?.controlling),
+      helmLabel: this.sailing?.controlling ? "Отойти от штурвала [E]" : "Встать к штурвалу [E]",
     };
   }
 }

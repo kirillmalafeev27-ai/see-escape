@@ -7,11 +7,11 @@ import { EffectsSystem } from "./effects.js?v=20260615-mac-perf-v1";
 import { ProjectileSystem } from "./ballistics.js?v=20260619-authoritative-coop-v2";
 import { buildPlayerShip, SHIP_DEFAULTS } from "./ship.js?v=20260619-authoritative-coop-v2";
 import { EnemyFleet } from "./enemy.js?v=20260619-authoritative-coop-v2";
-import { PlayerController } from "./player.js?v=20260706-spectator-v1";
+import { PlayerController } from "./player.js?v=20260901-helm-touch-v1";
 import { DamageControlSystem } from "./damage-control.js?v=20260620-coop-touch-fixes-v1";
 import { loadAndAnalyzeShip } from "./models.js?v=20260607-assets-fire-v1";
 import { applyCollisionProfile, loadAppliedCollisionProfile } from "./collision-profile.js?v=20260609-remove-hold-helpers-v1";
-import { SailingSystem } from "./sailing.js?v=20260603-bonuses-island-v1";
+import { SailingSystem } from "./sailing.js?v=20260901-helm-touch-v1";
 import { TreasureSystem } from "./treasure.js?v=20260702-coop-story-sync-v1";
 import { IslandFortress } from "./island.js?v=20260620-story-treasure-v1";
 import { BonusSystem } from "./bonuses.js?v=20260702-coop-story-sync-v1";
@@ -325,6 +325,7 @@ export async function startGame(container, hud) {
     takePlankButton: hud.takePlankButton,
     scoopWaterButton: hud.scoopWaterButton,
     patchBreachButton: hud.patchBreachButton,
+    helmButton: hud.helmButton,
     islandTeleportButton: hud.islandTeleportButton,
     damageControl,
     sailing,
@@ -804,6 +805,7 @@ export async function startGame(container, hud) {
       display: element.style.display || "",
       disabled: Boolean(element.disabled),
       text: element.textContent || "",
+      active: element.classList.contains("active"),
     };
   }
 
@@ -830,6 +832,7 @@ export async function startGame(container, hud) {
       takePlankButton: buttonHudSnapshot(hud.takePlankButton),
       scoopWaterButton: buttonHudSnapshot(hud.scoopWaterButton),
       patchBreachButton: buttonHudSnapshot(hud.patchBreachButton),
+      helmButton: buttonHudSnapshot(hud.helmButton),
       jumpButton: buttonHudSnapshot(hud.jumpButton),
       islandTeleportButton: buttonHudSnapshot(hud.islandTeleportButton),
       restartButton: buttonHudSnapshot(hud.restartButton),
@@ -858,6 +861,7 @@ export async function startGame(container, hud) {
     element.style.display = snapshot.display || "";
     element.disabled = Boolean(snapshot.disabled);
     element.textContent = snapshot.text || "";
+    element.classList.toggle("active", Boolean(snapshot.active));
   }
 
   function applyPanelHudSnapshot(snapshot) {
@@ -884,7 +888,7 @@ export async function startGame(container, hud) {
       hud.crosshair.style.display = "none";
       hud.msg.textContent = "Жду ученика в этой комнате. Ученик должен войти по этому же коду и нажать «Начать игру».";
       hud.msg.style.opacity = "1";
-      for (const button of [hud.fireButton, hud.dumpButton, hud.takePlankButton, hud.scoopWaterButton, hud.patchBreachButton]) {
+      for (const button of [hud.fireButton, hud.dumpButton, hud.takePlankButton, hud.scoopWaterButton, hud.patchBreachButton, hud.helmButton]) {
         if (button) button.style.display = "none";
       }
       return;
@@ -898,6 +902,7 @@ export async function startGame(container, hud) {
     applyButtonHudSnapshot(hud.takePlankButton, snapshot.takePlankButton);
     applyButtonHudSnapshot(hud.scoopWaterButton, snapshot.scoopWaterButton);
     applyButtonHudSnapshot(hud.patchBreachButton, snapshot.patchBreachButton);
+    applyButtonHudSnapshot(hud.helmButton, snapshot.helmButton);
     applyButtonHudSnapshot(hud.jumpButton, snapshot.jumpButton);
     applyButtonHudSnapshot(hud.islandTeleportButton, snapshot.islandTeleportButton);
     applyButtonHudSnapshot(hud.restartButton, snapshot.restartButton);
@@ -1459,6 +1464,13 @@ export async function startGame(container, hud) {
       hud.patchBreachButton.style.display = ps.canPatchBreach ? "block" : "none";
       hud.patchBreachButton.textContent = "Заколотить дыру [F]";
     }
+    if (hud.helmButton) {
+      const helmVisible = ps.canTakeHelm || ps.atHelm;
+      hud.helmButton.style.display = helmVisible ? "block" : "none";
+      hud.helmButton.textContent = ps.helmLabel || "Встать к штурвалу [E]";
+      hud.helmButton.classList.toggle("active", Boolean(ps.atHelm));
+    }
+    document.body.classList.toggle("helm-mode", Boolean(ps.atHelm));
     hud.jumpButton.disabled = !ps.canJump;
 
     const enemyCount = fleet.list.filter((e) => !e.sinking).length;

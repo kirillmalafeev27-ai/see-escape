@@ -105,6 +105,9 @@
       .mobile-stick { --stick-x: 0px; --stick-y: 0px; position: absolute; left: calc(18px + env(safe-area-inset-left)); bottom: calc(24px + env(safe-area-inset-bottom)); width: 132px; height: 132px; border-radius: 50%; pointer-events: auto; touch-action: none; background: radial-gradient(circle, rgba(127,216,255,0.2), rgba(9,54,78,0.24)); border: 1px solid rgba(127,216,255,0.38); box-shadow: inset 0 0 24px rgba(127,216,255,0.12), 0 8px 26px rgba(0,0,0,0.32); }
       .mobile-stick-knob { position: absolute; left: 50%; top: 50%; width: 58px; height: 58px; border-radius: 50%; transform: translate(-50%, -50%) translate(var(--stick-x), var(--stick-y)); background: rgba(188,236,255,0.72); border: 1px solid rgba(234,246,255,0.82); box-shadow: 0 8px 20px rgba(0,0,0,0.32); }
       .mobile-look-pad { position: absolute; top: 0; right: 0; bottom: 0; width: 58vw; pointer-events: auto; touch-action: none; background: transparent; }
+      body.helm-mode .mobile-stick { background: radial-gradient(circle, rgba(255,226,122,0.22), rgba(70,42,15,0.28)); border-color: rgba(255,226,122,0.6); }
+      body.helm-mode .mobile-stick-knob { background: rgba(255,226,122,0.78); border-color: rgba(255,243,204,0.85); }
+      body.helm-mode .mobile-stick::after { content: "Паруса вверх-вниз · курс вбок"; position: absolute; left: 0; top: -22px; white-space: nowrap; font: 800 0.66rem "Segoe UI", system-ui, sans-serif; color: #ffe27a; text-shadow: 0 2px 6px rgba(0,0,0,0.65); }
       #crosshair { position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%); z-index: 11; width: 26px; height: 26px; display: none; pointer-events: none; }
       #crosshair::before, #crosshair::after { content: ""; position: absolute; background: #ffe27a; box-shadow: 0 0 3px #000; }
       #crosshair::before { left: 50%; top: 0; width: 2px; height: 100%; transform: translateX(-50%); }
@@ -127,6 +130,10 @@
       #scoopWaterButton { bottom: 182px; }
       #patchBreachButton { bottom: 236px; border-color: rgba(255,226,122,0.85); background: rgba(70,42,15,0.9); color: #ffe27a; }
       #patchBreachButton:hover { background: rgba(105,63,20,0.96); }
+      #helmButton { bottom: 290px; border-color: rgba(255,226,122,0.85); background: rgba(70,42,15,0.9); color: #ffe27a; }
+      #helmButton:hover { background: rgba(105,63,20,0.96); }
+      #helmButton.active { border-color: rgba(126,255,159,0.85); background: rgba(20,72,38,0.92); color: #caffd5; }
+      #helmButton.active:hover { background: rgba(27,99,51,0.96); }
       #islandTeleportButton { position: fixed; top: 64px; left: 50%; transform: translateX(-50%); z-index: 25; padding: 10px 15px; border: 1px solid rgba(126,255,159,0.78); border-radius: 9px; background: rgba(20,72,38,0.88); color: #caffd5; font: 700 0.82rem "Segoe UI", system-ui, sans-serif; cursor: pointer; box-shadow: 0 3px 14px rgba(0,0,0,0.35); }
       #islandTeleportButton:hover { background: rgba(27,99,51,0.95); }
       #audioGuideButton { position: fixed; top: 246px; right: 14px; z-index: 26; padding: 9px 12px; border: 1px solid rgba(255,226,122,0.78); border-radius: 8px; background: rgba(63,47,17,0.9); color: #ffe27a; font: 800 0.76rem "Segoe UI", system-ui, sans-serif; cursor: pointer; box-shadow: 0 3px 14px rgba(0,0,0,0.35); }
@@ -210,6 +217,7 @@
         #takePlankButton { bottom: calc(82px + env(safe-area-inset-bottom)); }
         #scoopWaterButton { bottom: calc(134px + env(safe-area-inset-bottom)); }
         #patchBreachButton { bottom: calc(186px + env(safe-area-inset-bottom)); }
+        #helmButton { bottom: calc(238px + env(safe-area-inset-bottom)); }
         #islandTeleportButton { top: calc(126px + env(safe-area-inset-top)); left: calc(10px + env(safe-area-inset-left)); transform: none; max-width: 150px; padding: 8px 10px; font-size: 0.68rem; }
         #audioGuideButton { top: calc(166px + env(safe-area-inset-top)); left: calc(10px + env(safe-area-inset-left)); right: auto; width: 58px; padding: 8px 0; font-size: 0; text-align: center; }
         #audioGuideButton::after { content: "Голос"; font-size: 0.64rem; }
@@ -292,6 +300,7 @@
     <button id="takePlankButton" class="deckActionButton" type="button">Взять доску [F]</button>
     <button id="scoopWaterButton" class="deckActionButton" type="button">Зачерпнуть воду [E]</button>
     <button id="patchBreachButton" class="deckActionButton" type="button">Заколотить дыру [F]</button>
+    <button id="helmButton" class="deckActionButton" type="button">Встать к штурвалу [E]</button>
     <button id="jumpButton" type="button">Прыжок [Пробел]</button>
     <button id="islandTeleportButton" type="button">Телепорт на остров</button>
     <button id="audioGuideButton" type="button" aria-pressed="true">Голос: вкл</button>
@@ -300,7 +309,7 @@
     <div id="hint" class="panel">
       <div><b>WASD</b> — ходить по палубе · мышь — обзор и наводка</div>
       <div><b>ЛКМ / экранная кнопка</b> — выстрел из ближайшей пушки</div>
-      <div><b>E у штурвала</b> — управление кораблём · <b>W/S</b> — паруса · <b>A/D</b> — курс</div>
+      <div><b>E у штурвала / жёлтая кнопка «Встать к штурвалу»</b> — управление кораблём · <b>W/S</b> или стик вверх-вниз — паруса · <b>A/D</b> или стик вбок — курс</div>
       <div><b>Пробел / кнопка прыжка</b> — перепрыгнуть на верхнюю палубу с лестницы</div>
       <div><b>E у дверей</b> — открыть трюм, затем спуститься ногами · <b>E на floor-8 в трюме</b> — взять доску, залатать пробоину или зачерпнуть воду</div>
       <div><b>E / синяя кнопка у борта</b> — вылить полное ведро за борт</div>
@@ -341,7 +350,7 @@
     <script src="./js/learning.js?v=20260619-coop-room-deck-v1"></script>
     <script src="./js/coop.js?v=20260706-spectator-v2"></script>
     <script type="module">
-    import { startGame } from "./js/game.js?v=20260706-spectator-v3";
+    import { startGame } from "./js/game.js?v=20260901-helm-touch-v1";
 
       const $ = (id) => document.getElementById(id);
       const loaderEl = $("loader");
@@ -370,6 +379,7 @@
         takePlankButton: $("takePlankButton"),
         scoopWaterButton: $("scoopWaterButton"),
         patchBreachButton: $("patchBreachButton"),
+        helmButton: $("helmButton"),
         islandTeleportButton: $("islandTeleportButton"),
         audioGuideButton: $("audioGuideButton"),
         prompt: $("prompt"),

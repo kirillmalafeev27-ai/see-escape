@@ -71,6 +71,13 @@ js/game.js        orchestration, collisions, wind, HUD, main loop
 | `Space` / `Ctrl` | Move up / down |
 | Click canvas | Capture mouse-look (first-person) |
 
+On phones and tablets the same actions run off the on-screen controls: the left
+joystick walks the deck, the right half of the screen looks around, and the
+buttons on the right edge cover the keyboard actions. Standing at the wheel
+brings up **Встать к штурвалу**; tapping it hands you the helm, after which the
+same joystick trims the sails (up/down) and steers the course (left/right) —
+exactly what `W/S` and `A/D` do on a keyboard.
+
 ## Run locally
 
 ```bash

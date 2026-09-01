@@ -51,9 +51,20 @@ export class SailingSystem {
     return position.distanceTo(this.helmPosition) <= HELM_RANGE;
   }
 
+  // Public probes for the HUD: the on-screen helm button mirrors the E key,
+  // so it needs the same "am I close enough" answer the prompt uses.
+  nearHelm(rig) {
+    const position = rig?.position || rig;
+    return Boolean(position) && this._nearHelm(position);
+  }
+
+  canTakeHelm(rig) {
+    return !this.anchored && !this.controlling && this.nearHelm(rig);
+  }
+
   getPrompt(rig) {
-    if (this.controlling) return "Штурвал: W/S - паруса · A/D - курс · E - отойти от штурвала";
-    return this._nearHelm(rig.position) ? "E - встать к штурвалу" : "";
+    if (this.controlling) return "Штурвал: W/S - паруса · A/D - курс · E или кнопка - отойти";
+    return this._nearHelm(rig.position) ? "E или кнопка - встать к штурвалу" : "";
   }
 
   interact(rig) {
@@ -63,9 +74,9 @@ export class SailingSystem {
       this.onMessage("Ты отошёл от штурвала. Корабль сохраняет курс.");
       return true;
     }
-    if (!this._nearHelm(rig.position)) return false;
+    if (this.anchored || !this._nearHelm(rig.position)) return false;
     this.controlling = true;
-    this.onMessage("Управление штурвалом: W/S меняют паруса, A/D поворачивают корабль.");
+    this.onMessage("Штурвал твой: вперёд-назад - паруса, вбок - курс.");
     return true;
   }
 
