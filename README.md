@@ -109,12 +109,15 @@ the service without any buildpack guesswork.
 
 1. **Create new → Service → Combined service**, connect this repo and branch.
 2. **Build:** Dockerfile, build context `/`, Dockerfile path `/Dockerfile`.
-3. **Ports:** one port, **internal port `8080`**, protocol **HTTP**, publicly
-   exposed. The port number here must match the port the container listens on —
-   that is `$PORT`, which defaults to `8080` (see the Dockerfile).
-4. **Health checks (optional but recommended):** HTTP, path `/healthz`, port
-   `8080`, initial delay ~10s.
-5. **Environment variables:** add the AI/voice keys below as secrets. None of
+3. **Run command:** leave it empty (the Dockerfile already runs `node server.js`),
+   or set `npm start`. If the service overrides it with `npm run start:northflank`,
+   that script exists too — every one of these runs the same `node server.js`.
+4. **Ports:** one port, protocol **HTTP**, publicly exposed. Northflank injects
+   its number as `$PORT` and the server binds to it; with no `$PORT` at all it
+   falls back to `8080`.
+5. **Health checks (optional but recommended):** HTTP, path `/healthz`, on the
+   same port, initial delay ~10s.
+6. **Environment variables:** add the AI/voice keys below as secrets. None of
    them are required for the service to boot.
 
 ### Troubleshooting `no healthy upstream`
@@ -123,16 +126,22 @@ That message comes from Northflank's ingress proxy, not from this app: the
 public URL resolved, but no healthy container was behind it. Check, in order:
 
 1. **Is a container actually running?** Service → *Observability / Logs*. A
-   successful boot prints `Ocean Sandbox listening on http://0.0.0.0:8080`.
+   successful boot prints `Ocean Sandbox listening on http://0.0.0.0:<port>`.
    If the log ends on a stack trace or an `npm` error, the build or start
    command failed and there is nothing to route to.
-2. **Does the port match?** The number in Service → *Ports* must equal the port
+2. **`npm error Missing script: "..."`** — the run command configured on the
+   service names a script this repo does not have. That is a crash loop: the
+   container restarts every few minutes and never serves a request. Point the
+   run command at `npm start`, or leave it empty to use the Dockerfile's
+   `node server.js`. (`start:northflank` is kept as an alias for services that
+   were configured with it.)
+3. **Does the port match?** The number in Service → *Ports* must equal the port
    in that boot log. A service listening on 8080 while the port entry says 3000
    (or vice versa) yields exactly `no healthy upstream`.
-3. **Is the health check pointing somewhere real?** Use `/healthz` (returns
+4. **Is the health check pointing somewhere real?** Use `/healthz` (returns
    `{"ok":true}`) or `/`. A health check on a path that 404s marks every
    container unhealthy and removes it from the load balancer.
-4. **Are there 0 replicas?** A scaled-to-zero or still-deploying service has no
+5. **Are there 0 replicas?** A scaled-to-zero or still-deploying service has no
    upstream yet; wait for the deployment to go green, or scale to at least 1.
 
 ## AI and voice env vars

@@ -9,6 +9,7 @@
   },
   "scripts": {
     "start": "node server.js",
+    "start:northflank": "node server.js",
     "dev": "node server.js"
   },
   "dependencies": {
