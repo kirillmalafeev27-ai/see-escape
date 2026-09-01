@@ -11,7 +11,7 @@ const { installQuizRoutes } = require("./quiz-generation.cjs");
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(__dirname, "public");
-const PORT = Number(process.env.PORT || 4317);
+const PORT = Number.parseInt(process.env.PORT || "", 10) || 8080;
 const HOST = process.env.HOST || "0.0.0.0";
 const JSON_LIMIT = 1024 * 1024;
 const ACTIVE_PLAYER_TTL = 15000;
@@ -621,6 +621,11 @@ const server = http.createServer(async (req, res) => {
 server.on("upgrade", (req, socket) => {
   if (handleCoopWebSocketUpgrade(req, socket)) return;
   socket.destroy();
+});
+
+server.on("error", (error) => {
+  console.error(`Failed to bind ${HOST}:${PORT} — ${error.code || error.message}`);
+  process.exit(1);
 });
 
 server.listen(PORT, HOST, () => {

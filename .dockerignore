@@ -1,0 +1,15 @@
+.git
+.github
+node_modules
+npm-debug.log*
+*.log
+.env
+.env.local
+.DS_Store
+dist/
+.cache/
+
+# Duplicated model sources — the served copies live in public/models/.
+/low_poly_island.glb
+/relic_optimized.glb
+/uploads_files_2930516_Treasure_chest_LowPoly.glb

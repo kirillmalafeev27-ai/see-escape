@@ -76,10 +76,10 @@ js/game.js        orchestration, collisions, wind, HUD, main loop
 ```bash
 npm install
 npm start
-# open http://localhost:3000
+# open http://localhost:8080
 ```
 
-Set a custom port with `PORT=8080 npm start`.
+Set a custom port with `PORT=3000 npm start`.
 
 ## Deploy to Render
 
@@ -102,7 +102,40 @@ This repo ships a [`render.yaml`](./render.yaml) Blueprint, so deployment is one
    - **Health check path:** `/healthz`
 3. Deploy. Render injects `PORT`; the server binds to `0.0.0.0:$PORT`.
 
-### AI and voice env vars
+## Deploy to Northflank
+
+The repo ships a [`Dockerfile`](./Dockerfile), so Northflank can build and run
+the service without any buildpack guesswork.
+
+1. **Create new → Service → Combined service**, connect this repo and branch.
+2. **Build:** Dockerfile, build context `/`, Dockerfile path `/Dockerfile`.
+3. **Ports:** one port, **internal port `8080`**, protocol **HTTP**, publicly
+   exposed. The port number here must match the port the container listens on —
+   that is `$PORT`, which defaults to `8080` (see the Dockerfile).
+4. **Health checks (optional but recommended):** HTTP, path `/healthz`, port
+   `8080`, initial delay ~10s.
+5. **Environment variables:** add the AI/voice keys below as secrets. None of
+   them are required for the service to boot.
+
+### Troubleshooting `no healthy upstream`
+
+That message comes from Northflank's ingress proxy, not from this app: the
+public URL resolved, but no healthy container was behind it. Check, in order:
+
+1. **Is a container actually running?** Service → *Observability / Logs*. A
+   successful boot prints `Ocean Sandbox listening on http://0.0.0.0:8080`.
+   If the log ends on a stack trace or an `npm` error, the build or start
+   command failed and there is nothing to route to.
+2. **Does the port match?** The number in Service → *Ports* must equal the port
+   in that boot log. A service listening on 8080 while the port entry says 3000
+   (or vice versa) yields exactly `no healthy upstream`.
+3. **Is the health check pointing somewhere real?** Use `/healthz` (returns
+   `{"ok":true}`) or `/`. A health check on a path that 404s marks every
+   container unhealthy and removes it from the load balancer.
+4. **Are there 0 replicas?** A scaled-to-zero or still-deploying service has no
+   upstream yet; wait for the deployment to go green, or scale to at least 1.
+
+## AI and voice env vars
 
 For generated German grammar tasks set one AI key:
 
@@ -124,7 +157,8 @@ TTS are configured without exposing secrets.
 
 ```
 .
-├── server.js            # Express server: static hosting, gzip, health check
+├── server.js            # HTTP server: static hosting, gzip, health check
+├── Dockerfile           # Container build (Northflank / any container host)
 ├── render.yaml          # Render Blueprint (web service)
 ├── package.json
 ├── public/
@@ -136,8 +170,9 @@ TTS are configured without exposing secrets.
 ## How it works
 
 Three.js loads as ES modules from a CDN via an import map (no bundler needed).
-`server.js` serves the `public/` directory and listens on `process.env.PORT`,
-which is exactly what Render's web-service contract expects.
+`server.js` serves the `public/` directory and listens on `process.env.PORT`
+(falling back to `8080`), which is what Render's web-service contract expects
+and what Northflank injects for the service's first port.
 
 ## License
 
