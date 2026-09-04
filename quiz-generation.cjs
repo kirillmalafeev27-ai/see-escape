@@ -78,6 +78,8 @@ const TOPIC_RULES = {
 
   'Artikel': `Bestimmt: der (m), die (f), das (n), die (Pl). Unbestimmt: ein (m/n), eine (f). Genus-Regeln: -ung/-heit/-keit/-schaft/-tion/-tät → die. -chen/-lein → das. -er/-ling → oft der.`,
 
+  'Reflexive Verben': `Reflexivpronomen Akkusativ: mich, dich, sich, uns, euch, sich. Dativ: mir, dir, sich, uns, euch, sich — Dativ nur, wenn zusätzlich ein Akkusativobjekt im Satz steht: "Ich wasche mich." (Akk) aber "Ich wasche mir die Hände." (Dat). AUFGABENBAU — verbindlich: Die Lücke ___ steht AUSSCHLIESSLICH für das Reflexivpronomen; das Verb steht bereits fertig konjugiert im Satz. Alle vier Optionen sind nackte Reflexivpronomen (mich, dich, sich, uns, euch, mir, dir) und unterscheiden sich NUR im Pronomen. Setze niemals die Verbform mit in die Optionen: sonst erschließt der Lerner die Lösung über die Konjugation und muss das Thema gar nicht kennen. Falsch, viel zu leicht: "Wir ___ heute Abend im Park." mit den Optionen "treffen uns / treffen sich / trifft euch / trefft uns" — hier verrät schon "wir" die Verbform. Richtig: "Wir treffen ___ heute Abend im Park." mit den Optionen "uns / sich / euch / mich". Richtig für den Dativ: "Ich putze ___ nach dem Essen die Zähne." mit den Optionen "mir / mich / sich / dir". Die falschen Pronomen müssen aus derselben Reihe stammen (andere Person oder anderer Kasus), nicht aus einer anderen Wortart. Echte reflexive Verben verwenden: sich freuen, sich interessieren, sich treffen, sich waschen, sich anziehen, sich beeilen, sich erinnern, sich vorstellen, sich setzen, sich fühlen, sich ärgern, sich entschuldigen.`,
+
   'Nominativ': `Subjekt im Nominativ. Prädikativ nach sein/werden/bleiben ebenfalls Nominativ. Richtig: "Der Mann ist ein guter Lehrer." | Falsch: "Der Mann ist einen guten Lehrer."`,
 };
 
@@ -406,16 +408,15 @@ function parseJsonAudioQuestions(rawText, expectedCount, level, lexicalTopic) {
 }
 
 function buildSyntheticPrompt({ level, lexicalTopic, grammarTopic, isWortstellung, questionsCount, exclude, topicRule }) {
-  {
-    const ruleBlock = topicRule ? `\nSpezifische Regel fuer "${grammarTopic}":\n${topicRule}\n` : '';
-    const excludeBlock = exclude && exclude.length
-      ? `\nVerwende diese Saetze nicht erneut: ${exclude.slice(-10).map((item) => `"${item}"`).join(', ')}\n`
-      : '';
-    const kind = isWortstellung
-      ? 'Wortstellungsuebungen. Die Aufgabe-Zeile enthaelt durcheinander gebrachte Woerter oder Satzteile.'
-      : 'Lueckenuebungen. Die Aufgabe-Zeile enthaelt einen deutschen Satz mit genau einer Luecke ___.';
+  const ruleBlock = topicRule ? `\nSpezifische Regel fuer "${grammarTopic}":\n${topicRule}\n` : '';
+  const excludeBlock = exclude && exclude.length
+    ? `\nVerwende diese Saetze nicht erneut: ${exclude.slice(-10).map((item) => `"${item}"`).join(', ')}\n`
+    : '';
+  const kind = isWortstellung
+    ? 'Wortstellungsuebungen. Die Aufgabe-Zeile enthaelt durcheinander gebrachte Woerter oder Satzteile.'
+    : 'Lueckenuebungen. Die Aufgabe-Zeile enthaelt einen deutschen Satz mit genau einer Luecke ___.';
 
-    return `Du bist ein erfahrener DaF-Lehrer und erstellst Multiple-Choice-Uebungen.
+  return `Du bist ein erfahrener DaF-Lehrer und erstellst Multiple-Choice-Uebungen.
 
 Erstelle genau ${questionsCount} deutsche Grammatikuebungen.
 Niveau: ${level}. Verwende keine Grammatik und keinen Wortschatz ueber ${level}.
@@ -427,10 +428,13 @@ Qualitaetsregeln:
 1. Jede Aufgabe hat genau vier Antwortmoeglichkeiten A, B, C, D.
 2. Genau eine Antwort ist grammatisch korrekt.
 3. Die falschen Antworten sind plausibel, aber eindeutig falsch.
-4. Die richtige Antwort muss absolut korrekt sein. Wenn du unsicher bist, formuliere die Aufgabe neu.
-5. Loese jede deiner Aufgaben selbst und schreibe die Schluessel erst nach der Selbstpruefung.
-6. In den Loesungen muss der Buchstabe und der exakte Text der richtigen Option stehen.
-7. Keine abgeschnittenen Saetze. Keine Erklaerungen. Kein JSON. Kein Markdown.
+4. Alle vier Optionen gehoeren zur selben Kategorie und unterscheiden sich NUR in dem Merkmal, das "${grammarTopic}" prueft. Baue nie zwei Fehler in eine Option (etwa falsche Verbform UND falsches Pronomen): sonst kann der Lerner die Loesung ueber das zweite Merkmal erraten, ohne das Thema zu beherrschen.
+5. Alles, was nicht geprueft wird, steht fertig im Satz und nicht in den Optionen. Die Luecke ___ deckt genau das geprüfte Element ab, nicht mehr.
+6. Die richtige Antwort muss absolut korrekt sein. Wenn du unsicher bist, formuliere die Aufgabe neu.
+7. Pruefe jede Aufgabe gegen Regel 4: Waere sie auch ohne Kenntnis von "${grammarTopic}" loesbar, schreibe sie neu.
+8. Loese jede deiner Aufgaben selbst und schreibe die Schluessel erst nach der Selbstpruefung.
+9. In den Loesungen muss der Buchstabe und der exakte Text der richtigen Option stehen.
+10. Keine abgeschnittenen Saetze. Keine Erklaerungen. Kein JSON. Kein Markdown.
 
 Ausgabeformat, exakt so:
 AUFGABEN
@@ -453,54 +457,6 @@ LOESUNGEN
 2: C = exakter Text der Option C
 
 Schreibe jetzt den vollstaendigen Block mit ${questionsCount} Aufgaben und danach den Loesungen.`;
-  }
-
-  const topicPart = topicRule ? `\nSpezifische Regel fuer "${grammarTopic}":\n${topicRule}\n` : '';
-  const excludePart = exclude && exclude.length
-    ? `\nVerwende diese Saetze nicht erneut: ${exclude.slice(-10).map((item) => `"${item}"`).join(', ')}\n`
-    : '';
-  const taskKind = isWortstellung
-    ? 'Wortstellungsuebungen. Die Aufgabe-Zeile enthaelt durcheinander gebrachte Woerter oder Satzteile.'
-    : 'Lueckenuebungen. Die Aufgabe-Zeile enthaelt einen deutschen Satz mit genau einer Luecke ___.';
-
-  return `Du bist ein erfahrener DaF-Lehrer und erstellst Multiple-Choice-Uebungen.
-
-Erstelle genau ${questionsCount} deutsche Grammatikuebungen.
-Niveau: ${level}. Verwende keine Grammatik und keinen Wortschatz ueber ${level}.
-Grammatikthema: ${grammarTopic}.
-Lexikalisches Thema: ${lexicalTopic || 'frei'}.
-Uebungstyp: ${taskKind}
-${topicPart}${excludePart}
-Qualitaetsregeln:
-1. Jede Aufgabe hat genau vier Antwortmoeglichkeiten A, B, C, D.
-2. Genau eine Antwort ist grammatisch korrekt.
-3. Die falschen Antworten sind plausibel, aber eindeutig falsch.
-4. Die richtige Antwort muss absolut korrekt sein. Wenn du unsicher bist, formuliere die Aufgabe neu.
-5. Loese jede deiner Aufgaben selbst und schreibe die Schluessel erst nach der Selbstpruefung.
-6. In den Loesungen muss der Buchstabe und der exakte Text der richtigen Option stehen.
-7. Keine abgeschnittenen Saetze. Keine Erklaerungen. Kein JSON. Kein Markdown.
-
-Ausgabeformat, exakt so:
-AUFGABEN
-1. Anweisung: Выбери правильный вариант.
-Satz: ...
-A) ...
-B) ...
-C) ...
-D) ...
-
-2. Anweisung: Выбери правильный вариант.
-Satz: ...
-A) ...
-B) ...
-C) ...
-D) ...
-
-LOESUNGEN
-1: A = exact text of option A
-2: C = exact text of option C
-
-Now write the full block with ${questionsCount} tasks and then the solutions.`;
 }
 
 function buildAudioPrompt({ level, lexicalTopic, questionsCount, exclude }) {
