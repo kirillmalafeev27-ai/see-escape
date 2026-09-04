@@ -119,18 +119,21 @@ the service without any buildpack guesswork.
 3. **Run command:** leave it empty (the Dockerfile already runs `node server.js`),
    or set `npm start`. If the service overrides it with `npm run start:northflank`,
    that script exists too — every one of these runs the same `node server.js`.
-4. **Ports:** one port, protocol **HTTP**, publicly exposed. Northflank injects
-   its number as `$PORT` and the server binds to it; with no `$PORT` at all it
-   falls back to `8080`.
+4. **Ports:** one port, protocol **HTTP**, publicly exposed. Northflank does not
+   inject `$PORT`, so with nothing set the server binds **both 8080 and 3000** —
+   either number in the port entry reaches the app. For any other number, set
+   `PORT` (or `PORTS`, comma-separated) in the service environment to match.
 5. **Health checks (optional but recommended):** HTTP, path `/healthz`, on the
    same port, initial delay ~10s.
 6. **Environment variables:** add the AI/voice keys below as secrets. None of
    them are required for the service to boot.
 
-### Troubleshooting `no healthy upstream`
+### Troubleshooting ingress errors
 
-That message comes from Northflank's ingress proxy, not from this app: the
-public URL resolved, but no healthy container was behind it. Check, in order:
+Both `no healthy upstream` and `upstream connect error ... Connection refused`
+come from Northflank's ingress proxy, not from this app. The first means no
+container was healthy at all; the second means the container is up but nothing
+answered on the port the proxy dialled. Check, in order:
 
 1. **Is a container actually running?** Service → *Observability / Logs*. A
    successful boot prints `Ocean Sandbox listening on http://0.0.0.0:<port>`.
@@ -142,9 +145,12 @@ public URL resolved, but no healthy container was behind it. Check, in order:
    run command at `npm start`, or leave it empty to use the Dockerfile's
    `node server.js`. (`start:northflank` is kept as an alias for services that
    were configured with it.)
-3. **Does the port match?** The number in Service → *Ports* must equal the port
-   in that boot log. A service listening on 8080 while the port entry says 3000
-   (or vice versa) yields exactly `no healthy upstream`.
+3. **Does the port match?** The boot log prints its port config first, e.g.
+   `Port config: PORT=(unset) PORTS=(unset) -> binding 8080, 3000`. Every number
+   in Service → *Ports* must appear in that list. A mismatch is what produces
+   `upstream connect error ... Connection refused`: the container is up, but
+   nothing is listening on the port the proxy dials. Fix it by matching the port
+   entry to a bound port, or by setting `PORT`/`PORTS` to the number you want.
 4. **Is the health check pointing somewhere real?** Use `/healthz` (returns
    `{"ok":true}`) or `/`. A health check on a path that 404s marks every
    container unhealthy and removes it from the load balancer.

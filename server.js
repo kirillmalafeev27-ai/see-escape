@@ -11,7 +11,21 @@ const { installQuizRoutes } = require("./quiz-generation.cjs");
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(__dirname, "public");
-const PORT = Number.parseInt(process.env.PORT || "", 10) || 8080;
+// Container hosts disagree about which port they route to, and some (Northflank
+// among them) do not inject $PORT at all. Accept a comma-separated list, and
+// with nothing configured serve both common defaults so the platform's port
+// entry matches whatever it was set to.
+const DEFAULT_PORTS = [8080, 3000];
+const PORTS = resolvePorts();
+
+function resolvePorts() {
+  const raw = process.env.PORTS || process.env.PORT || "";
+  const ports = raw
+    .split(",")
+    .map((value) => Number.parseInt(value.trim(), 10))
+    .filter((value) => Number.isInteger(value) && value > 0 && value < 65536);
+  return ports.length ? [...new Set(ports)] : [...DEFAULT_PORTS];
+}
 const HOST = process.env.HOST || "0.0.0.0";
 const JSON_LIMIT = 1024 * 1024;
 const ACTIVE_PLAYER_TTL = 15000;
@@ -591,7 +605,7 @@ function serveFile(req, res, filePath) {
   });
 }
 
-const server = http.createServer(async (req, res) => {
+const requestHandler = async (req, res) => {
   console.log(`${new Date().toISOString()} ${req.method} ${req.url}`);
 
   try {
@@ -616,18 +630,30 @@ const server = http.createServer(async (req, res) => {
   }
 
   serveFile(req, res, filePath);
-});
+};
 
-server.on("upgrade", (req, socket) => {
+function handleUpgrade(req, socket) {
   if (handleCoopWebSocketUpgrade(req, socket)) return;
   socket.destroy();
-});
+}
 
-server.on("error", (error) => {
-  console.error(`Failed to bind ${HOST}:${PORT} — ${error.code || error.message}`);
-  process.exit(1);
-});
+console.log(
+  `Port config: PORT=${process.env.PORT ?? "(unset)"} PORTS=${process.env.PORTS ?? "(unset)"} -> binding ${PORTS.join(", ")}`
+);
 
-server.listen(PORT, HOST, () => {
-  console.log(`Ocean Sandbox listening on http://${HOST}:${PORT}`);
+PORTS.forEach((port, index) => {
+  const server = http.createServer(requestHandler);
+  server.on("upgrade", handleUpgrade);
+  server.on("error", (error) => {
+    const reason = `Failed to bind ${HOST}:${port} — ${error.code || error.message}`;
+    // The first port is the contract; the extras are best-effort convenience.
+    if (index === 0) {
+      console.error(reason);
+      process.exit(1);
+    }
+    console.warn(`${reason} (extra port, ignored)`);
+  });
+  server.listen(port, HOST, () => {
+    console.log(`Ocean Sandbox listening on http://${HOST}:${port}`);
+  });
 });
