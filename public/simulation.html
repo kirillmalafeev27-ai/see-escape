@@ -2,11 +2,11 @@
 <html lang="ru">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <title>Морской бой · Ocean Sandbox</title>
     <style>
       * { margin: 0; padding: 0; box-sizing: border-box; }
-      html, body { height: 100%; overflow: hidden; overscroll-behavior: none; background: #04121c; font-family: "Segoe UI", system-ui, sans-serif; color: #eaf6ff; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+      html, body { height: 100%; overflow: hidden; overscroll-behavior: none; touch-action: manipulation; background: #04121c; font-family: "Segoe UI", system-ui, sans-serif; color: #eaf6ff; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
       #app { position: fixed; inset: 0; touch-action: none; }
       canvas { display: block; touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
       button, a, select { pointer-events: auto; touch-action: manipulation; -webkit-tap-highlight-color: transparent; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
@@ -18,7 +18,7 @@
       .primary:disabled { cursor: wait; opacity: 0.72; box-shadow: none; }
 
       #boot { position: fixed; inset: 0; z-index: 90; display: grid; place-items: center; padding: 28px; background: radial-gradient(circle at 50% 20%, #1a5276 0%, #0b2a3d 48%, #04121c 100%); }
-      #boot .boot-box { width: min(1060px, calc(100vw - 36px)); max-height: calc(100vh - 36px); overflow: auto; display: grid; grid-template-columns: minmax(250px, 0.8fr) minmax(0, 1.2fr); gap: 24px; align-items: start; padding: 24px; border-radius: 8px; background: rgba(4,18,28,0.78); box-shadow: 0 24px 80px rgba(0,0,0,0.45); }
+      #boot .boot-box { width: min(1060px, calc(100vw - 36px)); max-height: calc(100vh - 36px); max-height: calc(100dvh - 36px); overflow: auto; display: grid; grid-template-columns: minmax(250px, 0.8fr) minmax(0, 1.2fr); gap: 24px; align-items: start; padding: 24px; border-radius: 8px; background: rgba(4,18,28,0.78); box-shadow: 0 24px 80px rgba(0,0,0,0.45); }
       .boot-copy { display: grid; gap: 12px; }
       .boot-copy h1 { margin: 0; color: #ffe27a; font-size: clamp(2rem, 4vw, 4.2rem); line-height: 0.95; letter-spacing: 0; }
       .boot-copy p { margin: 0; color: #cfe6f3; line-height: 1.55; font-size: 0.92rem; }
@@ -348,6 +348,7 @@
     <div id="loader"><div class="spinner"></div><div>Загрузка моря…</div></div>
     <div id="err"><div><h2 style="color:#ff8080">Не удалось запустить</h2><pre id="errmsg"></pre></div></div>
 
+    <script src="./js/ios-zoom-guard.js"></script>
     <script src="./js/learning.js?v=20260619-coop-room-deck-v1"></script>
     <script src="./js/coop.js?v=20260706-spectator-v2"></script>
     <script type="module">
