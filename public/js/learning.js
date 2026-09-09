@@ -154,15 +154,17 @@
   }
 
   function validRawQuestion(question) {
+    const optionCount = Array.isArray(question?.options) ? question.options.length : 0;
     return Boolean(
       question &&
       typeof question.text === 'string' &&
       typeof question.display === 'string' &&
       Array.isArray(question.options) &&
-      question.options.length === 4 &&
+      optionCount >= 2 &&
+      optionCount <= 4 &&
       Number.isInteger(question.correct) &&
       question.correct >= 0 &&
-      question.correct <= 3
+      question.correct < optionCount
     );
   }
 

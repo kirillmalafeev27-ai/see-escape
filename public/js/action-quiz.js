@@ -101,6 +101,9 @@ export class ActionQuizGate {
   }
 
   _render(action, question) {
+    const choices = question.choices || [];
+    // Full-sentence options (Umformen / Satz bauen) need the full panel width.
+    const stacked = choices.some((choice) => String(choice).length > 28);
     const body = question.audioText
       ? `${escapeHtml(question.text || "")}<span>${escapeHtml(question.display || "")}</span>`
       : `${escapeHtml(question.text || "")}<span>${escapeHtml(question.display || question.q || "")}</span>`;
@@ -110,8 +113,8 @@ export class ActionQuizGate {
         <span>${escapeHtml(question.topic || question.level || "")}</span>
       </div>
       <div class="action-quiz-question">${body}</div>
-      <div class="action-quiz-options">
-        ${(question.choices || []).map((choice, index) => `
+      <div class="action-quiz-options${stacked ? " stacked" : ""}">
+        ${choices.map((choice, index) => `
           <button type="button" data-answer="${index}">
             <span>${String.fromCharCode(65 + index)}</span>${escapeHtml(choice)}
           </button>

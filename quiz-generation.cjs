@@ -126,15 +126,17 @@ function fetchWithTimeout(url, options = {}, timeoutMs = 30_000) {
 }
 
 function isValidQuestion(question) {
+  const optionCount = Array.isArray(question?.options) ? question.options.length : 0;
   return Boolean(
     question &&
     typeof question.text === 'string' &&
     typeof question.display === 'string' &&
     Array.isArray(question.options) &&
-    question.options.length === 4 &&
+    optionCount >= 2 &&
+    optionCount <= 4 &&
     typeof question.correct === 'number' &&
     question.correct >= 0 &&
-    question.correct <= 3
+    question.correct < optionCount
   );
 }
 
@@ -227,10 +229,12 @@ function parseSyntheticQuestions(rawText, expectedCount) {
       }
     }
 
-    if (optionLines.length !== 4) continue;
-    const orderedOptions = ['A', 'B', 'C', 'D'].map((label) => optionLines.find((option) => option.label === label)?.value || '');
+    if (optionLines.length < 2 || optionLines.length > 4) continue;
+    const expectedLabels = ['A', 'B', 'C', 'D'].slice(0, optionLines.length);
+    const orderedOptions = expectedLabels.map((label) => optionLines.find((option) => option.label === label)?.value || '');
     if (orderedOptions.some((option) => !option)) continue;
-    if (new Set(orderedOptions.map(normalizeAnswerText)).size !== 4) continue;
+    if (key.index >= orderedOptions.length) continue;
+    if (new Set(orderedOptions.map(normalizeAnswerText)).size !== orderedOptions.length) continue;
 
     if (key.answerText) {
       const keyText = normalizeAnswerText(key.answerText);
@@ -417,14 +421,45 @@ function parseJsonAudioQuestions(rawText, expectedCount, level, lexicalTopic) {
     .slice(0, expectedCount);
 }
 
+function taskTypeSystemPrompt(grammarTopic, isWortstellung) {
+  if (isWortstellung) return '';
+
+  return `Du erstellst Uebungen zum Thema "${grammarTopic}" und mischst dabei bewusst verschiedene Aufgabenarten,
+damit der Lerner die Regel wirklich anwendet und nicht nur ein Muster wiedererkennt.
+Nutze gemischt genau diese Aufgabenarten:
+1. Einsetzen mit Hinweis: Luecke plus Grundform in Klammern, z.B. "Er ___ jeden Morgen die Zeitung. (lesen)".
+2. Richtige Variante waehlen: eine Luecke und drei oder vier kurze Optionen.
+3. Umformen: ein vollstaendiger Satz als Aufgabe und vier ausgeschriebene Satzvarianten in der geforderten Form.
+4. Satz bauen: Woerter oder Satzteile durcheinander und vier komplette Satzvarianten.
+5. Fehler finden: ein Satz mit hoechstens einem Fehler; Optionen nur "Ja" und "Nein".
+Alle Aufgaben muessen natuerlich, eindeutig loesbar und fuer DaF-Lernende fair sein.`;
+}
+
+function taskTypeRules(grammarTopic, isWortstellung) {
+  if (isWortstellung) return '';
+
+  return `
+Aufgabenarten - mische sie ueber die ganze Serie moeglichst gleichmaessig:
+  1. Einsetzen mit Hinweis: Satz mit ___ und der Grundform in Klammern; 4 Optionen.
+  2. Richtige Variante waehlen: eine Luecke ohne Hinweis; 3 oder 4 Optionen.
+  3. Umformen: Die Aufgabe-Zeile ist ein vollstaendiger Satz, die Anweisung nennt die Zielform; 4 ausgeschriebene Satzvarianten.
+  4. Satz bauen: Die Aufgabe-Zeile enthaelt Woerter/Phrasen durcheinander, getrennt durch " / "; 4 komplette Satzvarianten.
+  5. Fehler finden: Die Aufgabe-Zeile ist ein fertiger Satz, die Anweisung lautet "Ist der Satz richtig?"; genau 2 Optionen: A) Ja  B) Nein. Etwa jede zweite dieser Aufgaben ist tatsaechlich korrekt, damit "Nein" nicht immer stimmt.
+- Die Anweisung-Zeile beschreibt die jeweilige Aufgabenart konkret; sie ist nicht bei allen Aufgaben gleich.
+- Die Aufgabenarten 3 bis 5 kommen ohne ___ aus; nur die Arten 1 und 2 enthalten eine Luecke.
+- Auch bei den Arten 3 und 4 unterscheiden sich die Satzvarianten NUR in dem Merkmal, das "${grammarTopic}" prueft.
+`;
+}
+
 function buildSyntheticPrompt({ level, lexicalTopic, grammarTopic, isWortstellung, questionsCount, exclude, topicRule }) {
   const ruleBlock = topicRule ? `\nSpezifische Regel fuer "${grammarTopic}":\n${topicRule}\n` : '';
   const excludeBlock = exclude && exclude.length
     ? `\nVerwende diese Saetze nicht erneut: ${exclude.slice(-10).map((item) => `"${item}"`).join(', ')}\n`
     : '';
+  const taskTypeBlock = taskTypeRules(grammarTopic, isWortstellung);
   const kind = isWortstellung
     ? 'Wortstellungsuebungen. Die Aufgabe-Zeile enthaelt durcheinander gebrachte Woerter oder Satzteile.'
-    : 'Lueckenuebungen. Die Aufgabe-Zeile enthaelt einen deutschen Satz mit genau einer Luecke ___.';
+    : 'Gemischte Uebungen. Die Aufgabe-Zeile ist je nach Aufgabenart ein Satz mit genau einer Luecke ___, ein vollstaendiger Satz oder eine Wortkette.';
 
   return `Du bist ein erfahrener DaF-Lehrer und erstellst Multiple-Choice-Uebungen.
 
@@ -433,13 +468,13 @@ Niveau: ${level}. Verwende keine Grammatik und keinen Wortschatz ueber ${level}.
 Grammatikthema: ${grammarTopic}.
 Lexikalisches Thema: ${lexicalTopic || 'frei'}.
 Uebungstyp: ${kind}
-${ruleBlock}${excludeBlock}
+${ruleBlock}${taskTypeBlock}${excludeBlock}
 Qualitaetsregeln:
-1. Jede Aufgabe hat genau vier Antwortmoeglichkeiten A, B, C, D.
+1. Jede Aufgabe hat zwei bis vier Antwortmoeglichkeiten A, B, C, D. Verwende vier Optionen, ausser eine Aufgabenart verlangt ausdruecklich Ja/Nein.
 2. Genau eine Antwort ist grammatisch korrekt.
 3. Die falschen Antworten sind plausibel, aber eindeutig falsch.
-4. Alle vier Optionen gehoeren zur selben Kategorie und unterscheiden sich NUR in dem Merkmal, das "${grammarTopic}" prueft. Baue nie zwei Fehler in eine Option (etwa falsche Verbform UND falsches Pronomen): sonst kann der Lerner die Loesung ueber das zweite Merkmal erraten, ohne das Thema zu beherrschen.
-5. Alles, was nicht geprueft wird, steht fertig im Satz und nicht in den Optionen. Die Luecke ___ deckt genau das geprüfte Element ab, nicht mehr.
+4. Alle Optionen einer Aufgabe gehoeren zur selben Kategorie und unterscheiden sich NUR in dem Merkmal, das "${grammarTopic}" prueft. Baue nie zwei Fehler in eine Option (etwa falsche Verbform UND falsches Pronomen): sonst kann der Lerner die Loesung ueber das zweite Merkmal erraten, ohne das Thema zu beherrschen.
+5. Alles, was nicht geprueft wird, steht fertig in der Aufgabe und nicht in den Optionen. Eine Luecke ___ deckt genau das geprüfte Element ab, nicht mehr.
 6. Die richtige Antwort muss absolut korrekt sein. Wenn du unsicher bist, formuliere die Aufgabe neu.
 7. Pruefe jede Aufgabe gegen Regel 4: Waere sie auch ohne Kenntnis von "${grammarTopic}" loesbar, schreibe sie neu.
 8. Loese jede deiner Aufgaben selbst und schreibe die Schluessel erst nach der Selbstpruefung.
@@ -455,16 +490,14 @@ B) ...
 C) ...
 D) ...
 
-2. Anweisung: Waehle die richtige Option.
+2. Anweisung: Ist der Satz richtig?
 Satz: ...
-A) ...
-B) ...
-C) ...
-D) ...
+A) Ja
+B) Nein
 
 LOESUNGEN
 1: A = exakter Text der Option A
-2: C = exakter Text der Option C
+2: B = Nein
 
 Schreibe jetzt den vollstaendigen Block mit ${questionsCount} Aufgaben und danach den Loesungen.`;
 }
@@ -503,7 +536,7 @@ Output only a JSON array, no Markdown:
 Write exactly ${questionsCount} objects now.`;
 }
 
-async function requestAiText(prompt, maxTokens) {
+async function requestAiText(prompt, maxTokens, systemPrompt = '') {
   const key = aiKey();
   if (!key) {
     const error = new Error('AI API key is not configured. Set AITUNNEL_API_KEY, AI_TUNNEL_API_KEY, OPENAI_API_KEY, or AI_API_KEY.');
@@ -523,7 +556,10 @@ async function requestAiText(prompt, maxTokens) {
         body: JSON.stringify({
           model,
           max_tokens: maxTokens,
-          messages: [{ role: 'user', content: prompt }],
+          messages: [
+            ...(systemPrompt ? [{ role: 'system', content: systemPrompt }] : []),
+            { role: 'user', content: prompt },
+          ],
         }),
       }, AI_TIMEOUT_MS);
 
@@ -628,7 +664,7 @@ function installQuizRoutes(app) {
     });
 
     try {
-      const text = await requestAiText(prompt, 8192);
+      const text = await requestAiText(prompt, 8192, taskTypeSystemPrompt(grammarTopic, isWortstellung));
       const valid = parseSyntheticQuestions(text, questionsCount);
       if (!valid.length) {
         return res.status(502).json({ error: 'No valid synthetic questions in LLM response' });
