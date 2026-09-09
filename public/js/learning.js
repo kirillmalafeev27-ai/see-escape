@@ -65,7 +65,8 @@
     'Kommunikation', 'Gefühle', 'Urlaub am Meer', 'Winterurlaub',
   ];
   const GRAMMAR_TOPICS = [
-    'Präsens', 'Perfekt', 'Präteritum', 'Futur I', 'Imperativ', 'Modalverben',
+    'Präsens', 'Verben mit Vokalwechsel', 'Perfekt', 'Präteritum', 'Futur I',
+    'Imperativ', 'Modalverben',
     'Trennbare Verben', 'Untrennbare Verben', 'Reflexive Verben',
     'Verben mit Präpositionen', 'Lassen', 'Werden', 'Sein vs. haben',
     'Nominativ', 'Akkusativ', 'Dativ', 'Genitiv', 'Artikel',
