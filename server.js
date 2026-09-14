@@ -328,17 +328,20 @@ function decorateResponse(res) {
       "Cache-Control": "no-cache",
     });
   };
+  // getHeaders() already returns a plain header object. Object.fromEntries()
+  // needs an iterable of pairs, so wrapping it threw "object is not iterable"
+  // and every res.send() — the whole /api/tts route — answered 500.
   res.send = (body) => {
     if (Buffer.isBuffer(body)) {
       if (!res.getHeader("Content-Length")) res.setHeader("Content-Length", body.length);
       if (!res.getHeader("Content-Type")) res.setHeader("Content-Type", "application/octet-stream");
-      send(res, res.statusCode || 200, body, Object.fromEntries(res.getHeaders()));
+      send(res, res.statusCode || 200, body, res.getHeaders());
       return;
     }
     const payload = String(body ?? "");
     if (!res.getHeader("Content-Type")) res.setHeader("Content-Type", "text/plain; charset=utf-8");
     res.setHeader("Content-Length", Buffer.byteLength(payload));
-    send(res, res.statusCode || 200, payload, Object.fromEntries(res.getHeaders()));
+    send(res, res.statusCode || 200, payload, res.getHeaders());
   };
 }
 

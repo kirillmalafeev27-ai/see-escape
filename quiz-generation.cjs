@@ -704,6 +704,7 @@ function installQuizRoutes(app) {
       return res.send(diskCached.buffer);
     }
 
+    let audio;
     try {
       const ttsResponse = await fetchWithTimeout(`https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(ELEVENLABS_VOICE_ID)}`, {
         method: 'POST',
@@ -734,16 +735,21 @@ function installQuizRoutes(app) {
 
       putTtsCache(cacheKey, { buffer, contentType });
       writeTtsDiskCache(cacheKey, buffer);
-      res.setHeader('Content-Type', contentType);
-      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
-      res.setHeader('X-TTS-Cache', 'MISS');
-      res.send(buffer);
+      audio = { buffer, contentType };
     } catch (error) {
-      res.status(502).json({
+      return res.status(502).json({
         error: 'ElevenLabs TTS request failed',
         detail: error?.name === 'AbortError' ? `timeout after ${TTS_TIMEOUT_MS}ms` : error?.message || String(error),
       });
     }
+
+    // Sending is deliberately outside the catch: a bug in building the reply
+    // was being reported as "ElevenLabs TTS request failed", which sent the
+    // search after the provider instead of the code.
+    res.setHeader('Content-Type', audio.contentType);
+    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    res.setHeader('X-TTS-Cache', 'MISS');
+    res.send(audio.buffer);
   });
 }
 
