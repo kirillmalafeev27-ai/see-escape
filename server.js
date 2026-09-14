@@ -329,16 +329,19 @@ function decorateResponse(res) {
     });
   };
   res.send = (body) => {
+    // getHeaders() hands back a null-prototype object, not the iterable of
+    // pairs Object.fromEntries wants — wrapping it threw on every call and took
+    // /api/tts down with it. writeHead accepts that object as it is.
     if (Buffer.isBuffer(body)) {
       if (!res.getHeader("Content-Length")) res.setHeader("Content-Length", body.length);
       if (!res.getHeader("Content-Type")) res.setHeader("Content-Type", "application/octet-stream");
-      send(res, res.statusCode || 200, body, Object.fromEntries(res.getHeaders()));
+      send(res, res.statusCode || 200, body, res.getHeaders());
       return;
     }
     const payload = String(body ?? "");
     if (!res.getHeader("Content-Type")) res.setHeader("Content-Type", "text/plain; charset=utf-8");
     res.setHeader("Content-Length", Buffer.byteLength(payload));
-    send(res, res.statusCode || 200, payload, Object.fromEntries(res.getHeaders()));
+    send(res, res.statusCode || 200, payload, res.getHeaders());
   };
 }
 
