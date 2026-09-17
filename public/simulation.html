@@ -245,8 +245,8 @@
     <script type="importmap">
       {
         "imports": {
-          "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
-          "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+          "three": "./vendor/three/three.module.js",
+          "three/addons/": "./vendor/three/addons/"
         }
       }
     </script>
@@ -351,8 +351,44 @@
     <script src="./js/ios-zoom-guard.js"></script>
     <script src="./js/learning.js?v=20260619-coop-room-deck-v1"></script>
     <script src="./js/coop.js?v=20260706-spectator-v2"></script>
+    <script>
+      // The module below hangs everything on a static import of three.js. If
+      // that import fails, the module body never runs — and its own error
+      // handler goes with it, leaving the boot screen up with a dead button
+      // and no explanation. This guard sits outside the module so the page can
+      // always say what happened.
+      (function () {
+        var reported = false;
+        function report(detail) {
+          if (reported) return;
+          reported = true;
+          var loader = document.getElementById("loader");
+          if (loader) loader.style.display = "none";
+          var msg = document.getElementById("errmsg");
+          if (msg) msg.textContent = detail;
+          var box = document.getElementById("err");
+          if (box) box.style.display = "flex";
+        }
+        window.addEventListener("error", function (event) {
+          var el = event && event.target;
+          if (!el || el === window || !el.tagName) return;
+          if (el.tagName === "SCRIPT" || el.tagName === "LINK") {
+            report("Не удалось загрузить " + (el.src || el.href || "файл игры") +
+              "\n\nПроверь соединение и обнови страницу. Если стоит блокировщик — отключи его для этого сайта.");
+          }
+        }, true);
+        window.addEventListener("DOMContentLoaded", function () {
+          setTimeout(function () {
+            if (window.SEA_BOOTED) return;
+            report("Игровой модуль не запустился за 20 секунд.\n\nОбычно это значит, что не загрузился один из файлов игры. Обнови страницу; если не помогает — попробуй другую сеть или отключи блокировщик.");
+          }, 20000);
+        });
+      })();
+    </script>
     <script type="module">
     import { startGame } from "./js/game.js?v=20260901-helm-touch-v1";
+
+      window.SEA_BOOTED = true;
 
       const $ = (id) => document.getElementById(id);
       const loaderEl = $("loader");
