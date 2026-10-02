@@ -163,7 +163,7 @@ For generated German grammar tasks set one AI key:
 
 - `AITUNNEL_API_KEY` or `AI_TUNNEL_API_KEY` for AI Tunnel
 - `OPENAI_API_KEY` for an OpenAI-compatible `/chat/completions` endpoint
-- optional `AI_MODELS`, for example `gpt-5.4`
+- optional `AI_MODELS`, for example `gpt-6-sol`
 - optional `OPENAI_BASE_URL` or `AI_BASE_URL` for custom gateways
 
 For ElevenLabs speech set:
