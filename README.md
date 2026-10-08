@@ -175,6 +175,15 @@ For ElevenLabs speech set:
 Check production config at `/api/quiz/status`. It reports whether generation and
 TTS are configured without exposing secrets.
 
+Most grammar topics are generated as one-gap tasks with the topic's rule from
+`TOPIC_RULES`. Topics listed in `TOPIC_TASK_MIX` get a mix of task types instead,
+because a single gap leaves them a trivial choice. Perfekt mixes five: form the
+Partizip II, fill auxiliary and participle together (2×2 matrix), put a present
+sentence into Perfekt (`… → Perfekt`), pick the corrected sentence (`… (1 Fehler)`),
+and build the sentence from parts (`Woerter: a / b / c`); at most one task per batch
+is a bare haben/sein choice. `quiz-generation.cjs` is copied byte for byte into
+Schtolnya and Schatzkammer, so edit it here.
+
 ## Project structure
 
 ```

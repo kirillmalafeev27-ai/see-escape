@@ -83,6 +83,20 @@ const TOPIC_RULES = {
   'Nominativ': `Subjekt im Nominativ. Prädikativ nach sein/werden/bleiben ebenfalls Nominativ. Richtig: "Der Mann ist ein guter Lehrer." | Falsch: "Der Mann ist einen guten Lehrer."`,
 };
 
+// Themen, bei denen eine einzige Luecke nur eine triviale Wahl laesst (Perfekt: haben oder sein),
+// bekommen statt "Lueckenuebungen" eine Mischung von Aufgabentypen. Die Anzeige jedes Typs ist
+// so gebaut, dass auch ein Client ohne Anweisung erkennt, was zu tun ist ("→ Perfekt",
+// "(1 Fehler)", "Woerter: a / b / c", zwei Luecken).
+const TOPIC_TASK_MIX = {
+  'Perfekt': `Mische diese Typen: bei 10 Aufgaben mindestens 4 verschiedene, keiner oefter als 3-mal. Hoechstens 1 Aufgabe, in der nur haben/sein gewaehlt wird.
+P) Partizip II bilden. Anweisung: Setze das Partizip II ein. Satz mit Hilfsverb, Luecke fuer das Partizip, Infinitiv in Klammern: "Wir haben bis acht Uhr ___. (arbeiten)". Optionen: vier Formen desselben Verbs (gearbeitet / arbeitet / geärbeitet / gearbeiten). Bevorzugt trennbare, untrennbare, -ieren- und unregelmaessige Verben.
+K) Hilfsverb und Partizip zusammen. Anweisung: Ergaenze beide Luecken. Zwei Luecken, Infinitiv in Klammern: "Gestern ___ ich um sechs ___. (aufstehen)". Optionen als 2x2-Matrix, Teile mit " – " getrennt: "bin – aufgestanden", "habe – aufgestanden", "bin – aufgesteht", "habe – aufgesteht".
+U) Umformung. Anweisung: Setze den Satz ins Perfekt. Satz: ein Praesens-Satz und " → Perfekt", z. B. "Der Bus faehrt um acht ab. → Perfekt". Optionen: vier vollstaendige Perfekt-Saetze.
+F) Fehlerkorrektur. Anweisung: Waehle die korrigierte Fassung. Satz: ein Perfekt-Satz mit genau einem Perfekt-Fehler und " (1 Fehler)". Optionen: die richtige Korrektur, der unveraenderte Fehlersatz, zwei falsche Korrekturen.
+S) Satzbau. Anweisung: Bilde den Satz im Perfekt. Statt "Satz:" schreibe "Woerter:" und die Satzglieder durch " / " getrennt in zufaelliger Reihenfolge, das Partizip schon gebildet. Optionen: vier Anordnungen genau dieser Woerter; richtig nur mit Hilfsverb auf Position 2 und Partizip am Satzende.
+Bei U, F und S unterscheiden sich die vier Saetze nur in Hilfsverb, Partizip oder Stellung des Partizips; der uebrige Wortlaut ist gleich.`,
+};
+
 function aiKey() {
   return process.env.AITUNNEL_API_KEY ||
     process.env.AI_TUNNEL_API_KEY ||
@@ -155,6 +169,12 @@ function normalizeTopicKey(value) {
 function topicRuleFor(grammarTopic) {
   const target = normalizeTopicKey(grammarTopic);
   const entry = Object.entries(TOPIC_RULES).find(([key]) => normalizeTopicKey(key) === target);
+  return entry ? entry[1] : '';
+}
+
+function taskMixFor(grammarTopic) {
+  const target = normalizeTopicKey(grammarTopic);
+  const entry = Object.entries(TOPIC_TASK_MIX).find(([key]) => normalizeTopicKey(key) === target);
   return entry ? entry[1] : '';
 }
 
@@ -407,12 +427,15 @@ function parseJsonAudioQuestions(rawText, expectedCount, level, lexicalTopic) {
     .slice(0, expectedCount);
 }
 
-function buildSyntheticPrompt({ level, lexicalTopic, grammarTopic, isWortstellung, questionsCount, exclude, topicRule }) {
+function buildSyntheticPrompt({ level, lexicalTopic, grammarTopic, isWortstellung, questionsCount, exclude, topicRule, taskMix }) {
   const ruleBlock = topicRule ? `\nSpezifische Regel fuer "${grammarTopic}":\n${topicRule}\n` : '';
+  const mixBlock = taskMix ? `\nAufgabentypen fuer "${grammarTopic}":\n${taskMix}\n` : '';
   const excludeBlock = exclude && exclude.length
     ? `\nVerwende diese Saetze nicht erneut: ${exclude.slice(-10).map((item) => `"${item}"`).join(', ')}\n`
     : '';
-  const kind = isWortstellung
+  const kind = taskMix
+    ? 'verschiedene Aufgabentypen, siehe "Aufgabentypen" unten.'
+    : isWortstellung
     ? 'Wortstellungsuebungen. Die Aufgabe-Zeile enthaelt durcheinander gebrachte Woerter oder Satzteile.'
     : 'Lueckenuebungen. Die Aufgabe-Zeile enthaelt einen deutschen Satz mit genau einer Luecke ___.';
 
@@ -423,7 +446,7 @@ Niveau: ${level}. Verwende keine Grammatik und keinen Wortschatz ueber ${level}.
 Grammatikthema: ${grammarTopic}.
 Lexikalisches Thema: ${lexicalTopic || 'frei'}.
 Uebungstyp: ${kind}
-${ruleBlock}${excludeBlock}
+${ruleBlock}${mixBlock}${excludeBlock}
 Qualitaetsregeln:
 1. Jede Aufgabe hat genau vier Antwortmoeglichkeiten A, B, C, D.
 2. Genau eine Antwort ist grammatisch korrekt.
@@ -615,6 +638,7 @@ function installQuizRoutes(app) {
       questionsCount,
       exclude: Array.isArray(exclude) ? exclude : [],
       topicRule: topicRuleFor(grammarTopic),
+      taskMix: taskMixFor(grammarTopic),
     });
 
     try {
